@@ -8,10 +8,10 @@ During development stages `endpoints` may not change, but the associated QP pair
 * _Communication breaks_ when multiple servers talking to each other with evolving QP pairs per E
 * _Systemic mess_ when a simple change in either of `E, Q or P` happens
 * _Coordination delays_ accruing technical debt, when several team members are modifying microservice data 
-  -:x: endpoints not versioned
-  -:x: endpoints not mapped against all the linked QP pairs per E
-  -:x: no summary of endpoint inventory
-  -:x: no inbuilt tool for doc generation of EQP pairs
+  - :x: endpoints not versioned
+  - :x: endpoints not mapped against all the linked QP pairs per E
+  - :x: no summary of endpoint inventory
+  - :x: no inbuilt tool for doc generation of EQP pairs
 
 So, EDMS helps to reduce the chaos so that development progresses without hassle regardless of the team size, without having to compromise speed or efficiency.  
 
