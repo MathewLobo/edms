@@ -1,3 +1,4 @@
+mod dashboard_db;
 mod db;
 mod events;
 mod handlers;
@@ -47,6 +48,14 @@ async fn main() -> anyhow::Result<()> {
     let core = Arc::new(EdmsCore::new(&db_path));
     core.connect().map_err(|e| anyhow::anyhow!("{e:?}"))?;
     initialize_schema_from_core(&core).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+
+    let dashboard_conn = dashboard_db::init_dashboard_db(&root)
+    .expect("Failed to initialize dashboard database");
+
+    match dashboard_db::take_snapshot(&dashboard_conn, std::path::Path::new(&db_path), &root) {
+        Ok(snapshot) => info!("Dashboard snapshot taken: {:?}", snapshot),
+        Err(e) => tracing::warn!("Failed to take dashboard snapshot: {e}"),
+    }
 
     let queries = Arc::new(QueryMap::load_or_default());
     let state = state::AppState::new(core, queries);
