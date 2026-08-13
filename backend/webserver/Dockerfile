@@ -55,7 +55,7 @@ RUN mkdir -p edms_root/endpoints/reports \
              edms_root/repo \
              edms_data
 
-RUN useradd -m appuser && chown -R appuser /app
+RUN mkdir -p /edms_root && useradd -m appuser && chown -R appuser /app /edms_root
 USER appuser
 
 EXPOSE 3000
