@@ -1,5 +1,5 @@
 # ── Stage 1: Build edms-child from compute/ ─────────────────────────
-FROM rust:1.85 AS compute-builder
+FROM rust:1.90-bookworm AS compute-builder
 
 RUN apt-get update && apt-get install -y \
     pkg-config \
@@ -13,7 +13,7 @@ COPY compute/src ./src
 RUN cargo build --release
 
 # ── Stage 2: Build rust-webserver from webserver/ ───────────────────
-FROM rust:1.85 AS webserver-builder
+FROM rust:1.90-bookworm AS webserver-builder
 
 RUN apt-get update && apt-get install -y \
     pkg-config \
@@ -21,6 +21,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /webserver
+COPY compute/Cargo.toml compute/Cargo.lock /compute/
+COPY compute/src /compute/src
 COPY webserver/Cargo.toml webserver/Cargo.lock ./
 COPY webserver/libs ./libs
 COPY webserver/src ./src
