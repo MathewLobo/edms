@@ -44,7 +44,7 @@ impl AppState {
     /// Takes a new dashboard snapshot using the current state's paths.
     /// Call this after any change that should be reflected immediately
     /// (e.g. a new endpoint being created).
-    pub fn refresh_dashboard_snapshot(&self) {
+   pub fn refresh_dashboard_snapshot(&self) {
         let conn = self.dashboard_conn.lock().unwrap();
         match crate::dashboard_db::take_snapshot(&conn, &self.db_path, &self.storage_root) {
             Ok(snapshot) => {
@@ -52,6 +52,16 @@ impl AppState {
             }
             Err(e) => {
                 tracing::warn!("Failed to refresh dashboard snapshot: {e}");
+            }
+        }
+
+        match crate::dashboard_db::rotate_old_snapshots(&conn) {
+            Ok(deleted) if deleted > 0 => {
+                tracing::info!("Rotated {deleted} snapshot(s) older than 30 days");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("Failed to rotate old snapshots: {e}");
             }
         }
     }

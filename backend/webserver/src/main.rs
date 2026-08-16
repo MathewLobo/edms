@@ -58,6 +58,12 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!("Failed to take dashboard snapshot: {e}"),
     }
 
+    match dashboard_db::rotate_old_snapshots(&dashboard_conn) {
+        Ok(deleted) if deleted > 0 => info!("Rotated {deleted} old dashboard snapshot(s) on startup"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("Failed to rotate old snapshots on startup: {e}"),
+    }
+
     let queries = Arc::new(QueryMap::load_or_default());
     let state = state::AppState::new(
         core,
