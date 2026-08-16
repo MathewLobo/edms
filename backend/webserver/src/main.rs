@@ -22,6 +22,7 @@ use handlers::{
     bookmarks::{create_collection, ws_load_collection},
     callback::ipc_callback,
     dataview::{dashboard, delete_folder, merge_folder, ws_make_folder_active},
+    endpoints::{create_endpoint, delete_endpoint},
     repo::export_collection,
     test_view::{
         clear_bookmarks, clear_history, save_bookmark, save_history, stop,
@@ -50,7 +51,7 @@ async fn main() -> anyhow::Result<()> {
     initialize_schema_from_core(&core).map_err(|e| anyhow::anyhow!("{e:?}"))?;
 
     let dashboard_conn = dashboard_db::init_dashboard_db(&root)
-    .expect("Failed to initialize dashboard database");
+        .expect("Failed to initialize dashboard database");
 
     match dashboard_db::take_snapshot(&dashboard_conn, std::path::Path::new(&db_path), &root) {
         Ok(snapshot) => info!("Dashboard snapshot taken: {:?}", snapshot),
@@ -58,10 +59,18 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let queries = Arc::new(QueryMap::load_or_default());
-    let state = state::AppState::new(core, queries);
+    let state = state::AppState::new(
+        core,
+        queries,
+        dashboard_conn,
+        std::path::PathBuf::from(&db_path),
+        root.clone(),
+    );
 
     let app = Router::new()
         .route("/home", get(home))
+        .route("/endpoints/create", post(create_endpoint))
+        .route("/endpoints/:endpoint_id/delete", post(delete_endpoint))
         .route("/test-view", get(test_view))
         .route("/list-view", get(list_view))
         .route("/test-view/endpoints/load", get(ws_load_endpoints))

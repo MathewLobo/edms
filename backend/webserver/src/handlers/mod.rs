@@ -1,6 +1,7 @@
 pub mod health;
 pub mod hello;
 pub mod echo;
+pub mod endpoints;
 pub mod bookmarks;
 pub mod callback;
 pub mod dataview;
