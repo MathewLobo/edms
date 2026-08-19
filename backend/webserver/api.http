@@ -1,0 +1,145 @@
+### EDMS Webserver API
+### For use with the VS Code "REST Client" extension (or IntelliJ's built-in HTTP client).
+### Generated from routes in src/main.rs on the mathew/dashboard-sqlite branch.
+###
+### Some routes below are WebSocket-only and cannot be driven from this file — they are
+### marked "WS ONLY" and left commented out. Use a WS client (e.g. websocat, browser
+### devtools) against ws://localhost:3000/<path> instead.
+
+@baseUrl = http://localhost:3000
+
+# ============================================================
+# Views
+# ============================================================
+
+### Home view metadata
+GET {{baseUrl}}/home
+
+### Test view metadata
+GET {{baseUrl}}/test-view
+
+### List view metadata
+GET {{baseUrl}}/list-view
+
+# ============================================================
+# Endpoints CRUD
+# ============================================================
+
+### Create an endpoint
+# Side effect: triggers a dashboard snapshot refresh (dashboard.db) on success.
+POST {{baseUrl}}/endpoints/create
+Content-Type: application/json
+
+{
+  "endpoint_id": "get-user-profile",
+  "endpoint_str": "https://api.example.com/users/{id}",
+  "annotation": "Fetches a user profile by id"
+}
+
+### Delete an endpoint
+# Side effect: same dashboard snapshot refresh as create, on success.
+POST {{baseUrl}}/endpoints/get-user-profile/delete
+
+# ============================================================
+# Test View
+# ============================================================
+
+### Stop the current test run
+POST {{baseUrl}}/test-view/stop
+
+### Save a test run to history
+POST {{baseUrl}}/test-view/save/history
+Content-Type: application/json
+
+{
+  "endpoint_id": "get-user-profile",
+  "action": "test",
+  "details": "manual run from api.http"
+}
+
+### Save a bookmark
+POST {{baseUrl}}/test-view/save/bookmark
+Content-Type: application/json
+
+{
+  "endpoint_id": "get-user-profile",
+  "notes": "known-good response, keep for regression checks"
+}
+
+### Clear all history
+POST {{baseUrl}}/test-view/history/clearall
+
+### Clear all bookmarks
+POST {{baseUrl}}/test-view/bookmark/clearall
+
+### WS ONLY — subscribe to live endpoint list: GET /test-view/endpoints/load
+### WS ONLY — subscribe to live bookmark list:  GET /test-view/bookmarks/load
+### WS ONLY — run a test (send {"type":"...","payload":{"endpoint_id","method","body","timeout_ms","tick_interval_ms"}}): GET /test-view/run
+### WS ONLY — add a history entry to a bookmark folder: GET /test-view/{bookmark}/add
+### WS ONLY — delete an entry from a bookmark folder:   GET /test-view/{bookmark}/delete
+
+# ============================================================
+# Bookmarks
+# ============================================================
+
+### Snapshot the active workspace's bookmarks into a named collection
+POST {{baseUrl}}/bookmarks/my-collection/create
+
+### WS ONLY — load a bookmark collection into the active workspace: GET /bookmarks/{collection}/load
+
+# ============================================================
+# Data View
+# ============================================================
+
+### Delete a data folder
+POST {{baseUrl}}/dataview/my-folder/delete
+
+### Merge a data folder (fire-and-forget — returns 202 immediately,
+### result arrives later via POST /internal/callback -> ExportReady event)
+POST {{baseUrl}}/dataview/my-folder/merge
+
+### WS ONLY — mark a folder active (syncs to disk, broadcasts FolderBecameActive): GET /dataview/{folder}/active
+
+### Live active-folder dashboard counts (endpoints / bookmarks / history)
+# NOTE: this is NOT the dashboard_snapshots table from dashboard_db.rs —
+# it's a separate, older live-count endpoint scoped to the active folder.
+# See the "Dashboard Snapshot" section below for the snapshot data.
+GET {{baseUrl}}/dataview/dashboard
+
+# ============================================================
+# Dashboard Snapshot
+# ============================================================
+
+### Latest dashboard snapshot (endpoint/bookmark/tag counts, DB size,
+### storage size, file count) — taken on startup and after every
+### endpoint create/delete.
+GET {{baseUrl}}/dashboard/snapshot
+
+### Full snapshot history, oldest first (rolling 30-day retention window)
+GET {{baseUrl}}/dashboard/snapshot/history
+
+### Static data — hardcoded config loaded from config.yaml at startup:
+### application limits, stability/commit info, external links.
+GET {{baseUrl}}/dashboard/static
+
+# ============================================================
+# Logs
+# ============================================================
+
+### Plain-text tail of the app log (last 500 lines, oldest first)
+GET {{baseUrl}}/logs
+
+# ============================================================
+# Repo Export
+# ============================================================
+
+### Export a bookmark collection
+# Returns markdown immediately; also fires async zip export + markdown
+# generation jobs in the background (results via /internal/callback).
+GET {{baseUrl}}/repo/my-collection/export.zip/export
+
+# ============================================================
+# Internal (do not call from the UI — edms-child callback channel only)
+# ============================================================
+
+# POST {{baseUrl}}/internal/callback

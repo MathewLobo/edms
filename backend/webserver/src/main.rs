@@ -1,8 +1,10 @@
+mod config;
 mod dashboard_db;
 mod db;
 mod events;
 mod handlers;
 mod ipc;
+mod logging;
 mod state;
 mod timer;
 
@@ -21,8 +23,10 @@ use std::{net::SocketAddr, sync::Arc};
 use handlers::{
     bookmarks::{create_collection, ws_load_collection},
     callback::ipc_callback,
+    dashboard::{get_dashboard_snapshot, get_dashboard_snapshot_history, get_static_data},
     dataview::{dashboard, delete_folder, merge_folder, ws_make_folder_active},
     endpoints::{create_endpoint, delete_endpoint},
+    logs::get_logs,
     repo::export_collection,
     test_view::{
         clear_bookmarks, clear_history, save_bookmark, save_history, stop,
@@ -40,8 +44,16 @@ async fn main() -> anyhow::Result<()> {
     
     compute::folder_manager::verify_and_init(&root)
         .expect("Failed to initialize system folders");
-     
-    tracing_subscriber::fmt().with_target(false).init();
+
+    let log_writer = logging::AppLogWriter::new(&root).expect("Failed to open log file");
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_writer(move || log_writer.clone())
+        .init();
+
+    let app_config = std::env::var("EDMS_CONFIG_PATH")
+        .unwrap_or_else(|_| "config.yaml".to_string());
+    let config = Arc::new(config::AppConfig::from_file_or_default(&app_config));
 
     let db_path = std::env::var("EDMS_DB_PATH").unwrap_or_else(|_| "edms.db".to_string());
 
@@ -71,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
         dashboard_conn,
         std::path::PathBuf::from(&db_path),
         root.clone(),
+        config,
     );
 
     let app = Router::new()
@@ -95,8 +108,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/dataview/:folder/merge", post(merge_folder))
         .route("/dataview/:folder/active", get(ws_make_folder_active))
         .route("/dataview/dashboard", get(dashboard))
+        .route("/dashboard/snapshot", get(get_dashboard_snapshot))
+        .route("/dashboard/snapshot/history", get(get_dashboard_snapshot_history))
+        .route("/dashboard/static", get(get_static_data))
         .route("/repo/:collection/:filename/export", get(export_collection))
         .route("/internal/callback", post(ipc_callback))
+        .route("/logs", get(get_logs))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

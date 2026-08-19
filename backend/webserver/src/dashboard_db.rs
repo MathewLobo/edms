@@ -1,9 +1,12 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension, Row};
 use std::fs;
 use std::path::Path;
 use chrono::Utc;
 use serde::Serialize;
 use tracing::info;
+
+const SNAPSHOT_COLUMNS: &str = "snapshot_time, endpoint_count, bookmark_count, unique_tag_count, \
+    total_tag_count, endpoint_last_updated, sqlite_size_mb, storage_path, storage_size_mb, file_count";
 
 pub const DASHBOARD_FOLDER: &str = "dashboard";
 pub const DASHBOARD_DB_FILE: &str = "dashboard.db";
@@ -156,4 +159,41 @@ pub fn rotate_old_snapshots(dashboard_conn: &Connection) -> Result<usize, rusqli
         "DELETE FROM dashboard_snapshots WHERE snapshot_time < datetime('now', '-30 days')",
         [],
     )
+}
+
+fn row_to_snapshot(row: &Row) -> rusqlite::Result<DashboardSnapshot> {
+    Ok(DashboardSnapshot {
+        snapshot_time: row.get(0)?,
+        endpoint_count: row.get(1)?,
+        bookmark_count: row.get(2)?,
+        unique_tag_count: row.get(3)?,
+        total_tag_count: row.get(4)?,
+        endpoint_last_updated: row.get(5)?,
+        sqlite_size_mb: row.get(6)?,
+        storage_path: row.get(7)?,
+        storage_size_mb: row.get(8)?,
+        file_count: row.get(9)?,
+    })
+}
+
+/// Returns the most recently taken snapshot, if any exist yet.
+pub fn get_latest_snapshot(
+    dashboard_conn: &Connection,
+) -> rusqlite::Result<Option<DashboardSnapshot>> {
+    dashboard_conn
+        .query_row(
+            &format!("SELECT {SNAPSHOT_COLUMNS} FROM dashboard_snapshots ORDER BY id DESC LIMIT 1"),
+            [],
+            row_to_snapshot,
+        )
+        .optional()
+}
+
+/// Returns all retained snapshots (rolling 30-day window), oldest first —
+/// suitable for a trend chart.
+pub fn get_snapshot_history(dashboard_conn: &Connection) -> rusqlite::Result<Vec<DashboardSnapshot>> {
+    let mut stmt = dashboard_conn
+        .prepare(&format!("SELECT {SNAPSHOT_COLUMNS} FROM dashboard_snapshots ORDER BY id ASC"))?;
+    let rows = stmt.query_map([], row_to_snapshot)?;
+    rows.collect()
 }

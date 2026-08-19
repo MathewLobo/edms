@@ -1,3 +1,4 @@
+use crate::config::AppConfig;
 use crate::events::ServerEvent;
 use edms::core::EdmsCore;
 use edms::query_loader::QueryMap;
@@ -15,6 +16,8 @@ pub struct AppState {
     pub dashboard_conn: Arc<Mutex<Connection>>,
     pub db_path: PathBuf,
     pub storage_root: PathBuf,
+    pub started_at: String,
+    pub config: Arc<AppConfig>,
 }
 
 impl AppState {
@@ -24,6 +27,7 @@ impl AppState {
         dashboard_conn: Connection,
         db_path: PathBuf,
         storage_root: PathBuf,
+        config: Arc<AppConfig>,
     ) -> Self {
         let (events_tx, _) = broadcast::channel(256);
         Self {
@@ -34,6 +38,8 @@ impl AppState {
             dashboard_conn: Arc::new(Mutex::new(dashboard_conn)),
             db_path,
             storage_root,
+            started_at: chrono::Utc::now().to_rfc3339(),
+            config,
         }
     }
 
