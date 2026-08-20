@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use axum::{extract::State, http::StatusCode, Json};
+use chrono::Utc;
 use serde_json::json;
 
-use crate::{dashboard_db, state::AppState};
+use crate::{dashboard_db, ipc, state::AppState};
 
 /// GET /dashboard/snapshot
 /// Returns the most recent dashboard snapshot (endpoint/bookmark/tag counts,
@@ -50,4 +53,94 @@ pub async fn get_dashboard_snapshot_history(
             Json(json!({ "error": format!("{e}") })),
         ),
     }
+}
+
+/// POST /dashboard/crud-operations/refresh
+/// Ravi's [1] approach — global, one-time processing via a compute child
+/// process, triggered only by this route (and app startup), never on a
+/// per-transaction basis. Fire-and-forget: result lands later via
+/// /internal/callback. This is what the dashboard's Refresh button hits.
+pub async fn refresh_crud_operations(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
+    ipc::spawn_child(
+        "compute_crud_operations",
+        json!({ "db_path": state.db_path.display().to_string() }),
+        3000,
+    );
+
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({ "ok": true, "status": "crud operations refresh queued" })),
+    )
+}
+
+/// GET /dashboard/crud-operations
+/// Returns the latest computed CRUD Operations breakdown (entity type x
+/// HTTP method, count + percentage of that row's total), plus when it was
+/// last computed. Empty until the first refresh completes.
+pub async fn get_crud_operations(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
+    let conn = state.dashboard_conn.lock().unwrap();
+    match dashboard_db::get_crud_operations(&conn) {
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no CRUD operations data yet — trigger POST /dashboard/crud-operations/refresh" })),
+        ),
+        Ok(Some((computed_at, rows))) => {
+            // Group by entity_type, then compute each cell's % of that row's total.
+            let mut by_entity: HashMap<String, Vec<(String, i64)>> = HashMap::new();
+            for row in &rows {
+                by_entity
+                    .entry(row.entity_type.clone())
+                    .or_default()
+                    .push((row.method.clone(), row.count));
+            }
+
+            let mut entities = serde_json::Map::new();
+            for (entity_type, methods) in by_entity {
+                let total: i64 = methods.iter().map(|(_, c)| c).sum();
+                let mut cells = serde_json::Map::new();
+                for (method, count) in methods {
+                    let pct = if total > 0 {
+                        (count as f64 / total as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+                    cells.insert(method, json!({ "count": count, "pct": pct }));
+                }
+                entities.insert(entity_type, json!(cells));
+            }
+
+            (
+                StatusCode::OK,
+                Json(json!({ "computed_at": computed_at, "rows": entities })),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("{e}") })),
+        ),
+    }
+}
+
+/// Called from the /internal/callback handler once the compute_crud_operations
+/// child process reports back — writes the result into dashboard.db and
+/// returns the computed_at timestamp used, for the caller to broadcast.
+pub fn store_crud_operations_result(
+    state: &AppState,
+    result: &serde_json::Value,
+) -> Result<String, String> {
+    let rows: Vec<dashboard_db::CrudOperationsRow> = result["rows"]
+        .as_array()
+        .ok_or("missing 'rows' in compute_crud_operations result")?
+        .iter()
+        .map(|r| dashboard_db::CrudOperationsRow {
+            entity_type: r["entity_type"].as_str().unwrap_or("").to_string(),
+            method: r["method"].as_str().unwrap_or("").to_string(),
+            count: r["count"].as_i64().unwrap_or(0),
+        })
+        .collect();
+
+    let computed_at = Utc::now().to_rfc3339();
+    let conn = state.dashboard_conn.lock().unwrap();
+    dashboard_db::store_crud_operations(&conn, &computed_at, &rows).map_err(|e| e.to_string())?;
+    Ok(computed_at)
 }

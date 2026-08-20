@@ -55,6 +55,21 @@ pub fn init_dashboard_db(app_root: &Path) -> Result<Connection, Box<dyn std::err
         [],
     )?;
 
+    // Holds the latest CRUD Operations breakdown (Ravi's [1] approach —
+    // global, refresh-triggered computation via a compute child process,
+    // not a per-transaction update). Cleared and repopulated on every
+    // refresh, so this only ever holds one "generation" of data at a time.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS crud_operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            computed_at TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            method TEXT NOT NULL,
+            count INTEGER NOT NULL
+        )",
+        [],
+    )?;
+
     info!(path = %db_path.display(), "Dashboard DB ready");
     Ok(conn)
 }
@@ -196,4 +211,59 @@ pub fn get_snapshot_history(dashboard_conn: &Connection) -> rusqlite::Result<Vec
         .prepare(&format!("SELECT {SNAPSHOT_COLUMNS} FROM dashboard_snapshots ORDER BY id ASC"))?;
     let rows = stmt.query_map([], row_to_snapshot)?;
     rows.collect()
+}
+
+/* ---------------- CRUD Operations (Ravi's global/refresh-triggered approach) ---------------- */
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CrudOperationsRow {
+    pub entity_type: String,
+    pub method: String,
+    pub count: i64,
+}
+
+/// Replaces the entire crud_operations table with a fresh set of rows —
+/// this always holds one "generation" of data (the latest refresh), not a
+/// history, matching the refresh-button model (no periodic accumulation).
+pub fn store_crud_operations(
+    dashboard_conn: &Connection,
+    computed_at: &str,
+    rows: &[CrudOperationsRow],
+) -> rusqlite::Result<()> {
+    dashboard_conn.execute("DELETE FROM crud_operations", [])?;
+    for row in rows {
+        dashboard_conn.execute(
+            "INSERT INTO crud_operations (computed_at, entity_type, method, count) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![computed_at, row.entity_type, row.method, row.count],
+        )?;
+    }
+    Ok(())
+}
+
+/// Returns the latest computed CRUD Operations breakdown, plus when it was
+/// computed. `None` if a refresh has never completed.
+pub fn get_crud_operations(
+    dashboard_conn: &Connection,
+) -> rusqlite::Result<Option<(String, Vec<CrudOperationsRow>)>> {
+    let computed_at: Option<String> = dashboard_conn
+        .query_row("SELECT computed_at FROM crud_operations LIMIT 1", [], |row| row.get(0))
+        .optional()?;
+
+    let Some(computed_at) = computed_at else {
+        return Ok(None);
+    };
+
+    let mut stmt = dashboard_conn
+        .prepare("SELECT entity_type, method, count FROM crud_operations ORDER BY entity_type, method")?;
+    let rows: Vec<CrudOperationsRow> = stmt
+        .query_map([], |row| {
+            Ok(CrudOperationsRow {
+                entity_type: row.get(0)?,
+                method: row.get(1)?,
+                count: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+
+    Ok(Some((computed_at, rows)))
 }

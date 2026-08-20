@@ -26,6 +26,8 @@ GET {{baseUrl}}/list-view
 # ============================================================
 
 ### Create an endpoint
+# "method" is optional — GET/POST/PUT/PATCH/DELETE only, 400 if invalid.
+# Omitting it leaves the endpoint unclassified in the CRUD Operations table.
 # Side effect: triggers a dashboard snapshot refresh (dashboard.db) on success.
 POST {{baseUrl}}/endpoints/create
 Content-Type: application/json
@@ -33,7 +35,8 @@ Content-Type: application/json
 {
   "endpoint_id": "get-user-profile",
   "endpoint_str": "https://api.example.com/users/{id}",
-  "annotation": "Fetches a user profile by id"
+  "annotation": "Fetches a user profile by id",
+  "method": "GET"
 }
 
 ### Delete an endpoint
@@ -121,6 +124,18 @@ GET {{baseUrl}}/dashboard/snapshot/history
 ### Static data — hardcoded config loaded from config.yaml at startup:
 ### application limits, stability/commit info, external links.
 GET {{baseUrl}}/dashboard/static
+
+### CRUD Operations breakdown (endpoint segments/tags/bookmarks/history/QP
+### pairs, grouped by HTTP method with count + % of that row's total).
+### Ravi's [1] approach: global processing via a compute child process,
+### triggered by app launch + this refresh route — never per-transaction.
+### 404 until the first refresh (startup or manual) completes.
+GET {{baseUrl}}/dashboard/crud-operations
+
+### Trigger a CRUD Operations recompute — this is what the dashboard's
+### Refresh button hits. Fire-and-forget: 202 immediately, result lands a
+### moment later via POST /internal/callback.
+POST {{baseUrl}}/dashboard/crud-operations/refresh
 
 # ============================================================
 # Logs

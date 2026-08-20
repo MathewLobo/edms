@@ -23,7 +23,10 @@ use std::{net::SocketAddr, sync::Arc};
 use handlers::{
     bookmarks::{create_collection, ws_load_collection},
     callback::ipc_callback,
-    dashboard::{get_dashboard_snapshot, get_dashboard_snapshot_history, get_static_data},
+    dashboard::{
+        get_crud_operations, get_dashboard_snapshot, get_dashboard_snapshot_history,
+        get_static_data, refresh_crud_operations,
+    },
     dataview::{dashboard, delete_folder, merge_folder, ws_make_folder_active},
     endpoints::{create_endpoint, delete_endpoint},
     logs::get_logs,
@@ -111,6 +114,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/dashboard/snapshot", get(get_dashboard_snapshot))
         .route("/dashboard/snapshot/history", get(get_dashboard_snapshot_history))
         .route("/dashboard/static", get(get_static_data))
+        .route("/dashboard/crud-operations", get(get_crud_operations))
+        .route("/dashboard/crud-operations/refresh", post(refresh_crud_operations))
         .route("/repo/:collection/:filename/export", get(export_collection))
         .route("/internal/callback", post(ipc_callback))
         .route("/logs", get(get_logs))
@@ -121,6 +126,18 @@ async fn main() -> anyhow::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     info!("Listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    // CRUD Operations: global, one-time processing on launch (Ravi's [1]
+    // approach) — spun up via the compute service, same as the Refresh
+    // button. Fire-and-forget; result lands later via /internal/callback.
+    // Spawned after the listener is bound so the child's callback POST has
+    // somewhere to land.
+    ipc::spawn_child(
+        "compute_crud_operations",
+        serde_json::json!({ "db_path": db_path.clone() }),
+        3000,
+    );
+
     axum::serve(listener, app).await?;
 
     Ok(())
