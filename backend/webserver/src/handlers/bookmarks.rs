@@ -19,10 +19,13 @@ pub async fn create_collection(
     .await;
 
     match res {
-        Ok(Ok(inserted)) => (
-            StatusCode::OK,
-            Json(json!({ "ok": true, "collection": collection, "inserted": inserted })),
-        ),
+        Ok(Ok(inserted)) => {
+            state.refresh_dashboard_snapshot();
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "collection": collection, "inserted": inserted })),
+            )
+        }
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "ok": false, "error": format!("{e:?}") })),
@@ -69,6 +72,7 @@ async fn handle_ws_load_collection(mut socket: WebSocket, state: AppState, colle
             .ok()
             .and_then(|x| x.ok())
             .unwrap_or(0);
+            state.refresh_dashboard_snapshot();
             state.emit(ServerEvent::BookmarksUpdated { count }).await;
             let resp = json!({
                 "type": "collection_loaded",

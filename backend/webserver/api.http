@@ -82,6 +82,30 @@ POST {{baseUrl}}/test-view/bookmark/clearall
 ### WS ONLY — delete an entry from a bookmark folder:   GET /test-view/{bookmark}/delete
 
 # ============================================================
+# Tags
+# ============================================================
+# All three mutating/queried here trigger a live dashboard snapshot refresh
+# on add/remove, same as endpoint create/delete.
+
+### Add a tag to an endpoint
+POST {{baseUrl}}/tags/get-user-profile/add
+Content-Type: application/json
+
+{ "tag": "critical" }
+
+### Remove a tag from an endpoint
+POST {{baseUrl}}/tags/get-user-profile/remove
+Content-Type: application/json
+
+{ "tag": "critical" }
+
+### List tags for an endpoint
+GET {{baseUrl}}/tags/get-user-profile
+
+### Most-used tags across all endpoints
+GET {{baseUrl}}/tags/popular
+
+# ============================================================
 # Bookmarks
 # ============================================================
 

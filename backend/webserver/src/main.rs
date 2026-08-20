@@ -31,6 +31,7 @@ use handlers::{
     endpoints::{create_endpoint, delete_endpoint},
     logs::get_logs,
     repo::export_collection,
+    tags::{add_tag, list_tags_for_endpoint, popular_tags, remove_tag},
     test_view::{
         clear_bookmarks, clear_history, save_bookmark, save_history, stop,
         ws_add_from_history_to_bookmark, ws_delete_from_bookmark, ws_load_bookmarks,
@@ -116,6 +117,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/dashboard/static", get(get_static_data))
         .route("/dashboard/crud-operations", get(get_crud_operations))
         .route("/dashboard/crud-operations/refresh", post(refresh_crud_operations))
+        .route("/tags/popular", get(popular_tags))
+        .route("/tags/:endpoint_id", get(list_tags_for_endpoint))
+        .route("/tags/:endpoint_id/add", post(add_tag))
+        .route("/tags/:endpoint_id/remove", post(remove_tag))
         .route("/repo/:collection/:filename/export", get(export_collection))
         .route("/internal/callback", post(ipc_callback))
         .route("/logs", get(get_logs))

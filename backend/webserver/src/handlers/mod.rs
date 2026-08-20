@@ -8,5 +8,6 @@ pub mod dashboard;
 pub mod dataview;
 pub mod logs;
 pub mod repo;
+pub mod tags;
 pub mod test_view;
 pub mod view;
