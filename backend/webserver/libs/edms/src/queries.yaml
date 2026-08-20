@@ -4,15 +4,15 @@
 endpoints:
   E1:
     help: "Insert a new endpoint"
-    query: "INSERT INTO endpoints (endpoint_id, endpoint_str, annotation) VALUES (?, ?, ?)"
-  
+    query: "INSERT INTO endpoints (endpoint_id, endpoint_str, annotation, method) VALUES (?, ?, ?, ?)"
+
   E2:
     help: "Get endpoint by ID"
-    query: "SELECT * FROM endpoints WHERE endpoint_id = ?"
-  
+    query: "SELECT endpoint_id, endpoint_str, annotation, method FROM endpoints WHERE endpoint_id = ?"
+
   E3:
     help: "Get all endpoints"
-    query: "SELECT * FROM endpoints"
+    query: "SELECT endpoint_id, endpoint_str, annotation, method FROM endpoints"
   
   E4:
     help: "Update endpoint annotation"

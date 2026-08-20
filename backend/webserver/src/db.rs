@@ -13,38 +13,47 @@ pub struct EndpointDto {
     pub endpoint_id: String,
     pub endpoint_str: String,
     pub annotation: Option<String>,
+    pub method: Option<String>,
 }
 
 /* ---------------- endpoints (queries.yaml) ---------------- */
 
 pub fn insert_endpoint(core: &EdmsCore, queries: &QueryMap, ep: &EndpointDto) -> EdmsResult<usize> {
     let q = queries.get_endpoint_query("E1").ok_or(EdmsError::UnknownError)?;
-    // E1: INSERT INTO endpoints (endpoint_id, endpoint_str, annotation) VALUES (?, ?, ?)
-    core.proc(q, &[&ep.endpoint_id, &ep.endpoint_str, &ep.annotation.as_deref()])
+    // E1: INSERT INTO endpoints (endpoint_id, endpoint_str, annotation, method) VALUES (?, ?, ?, ?)
+    core.proc(
+        q,
+        &[
+            &ep.endpoint_id,
+            &ep.endpoint_str,
+            &ep.annotation.as_deref(),
+            &ep.method.as_deref(),
+        ],
+    )
 }
 
 pub fn list_endpoints(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<Vec<EndpointDto>> {
     let q = queries.get_endpoint_query("E3").ok_or(EdmsError::UnknownError)?;
-    // FIX #8: Use explicit column selection in query or handle by name
-    // Assuming E3 is: SELECT id, endpoint_id, endpoint_str, annotation FROM endpoints
+    // E3: SELECT endpoint_id, endpoint_str, annotation, method FROM endpoints
     core.cproc(q, &[], |row| {
         Ok(EndpointDto {
-            // If using positional indices, document the expected query format
-            // Better: ensure your queries.yaml has explicit column order
-            endpoint_id: row.get(1)?,
-            endpoint_str: row.get(2)?,
-            annotation: row.get(3)?,
+            endpoint_id: row.get(0)?,
+            endpoint_str: row.get(1)?,
+            annotation: row.get(2)?,
+            method: row.get(3)?,
         })
     })
 }
 
 pub fn get_endpoint(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str) -> EdmsResult<Option<EndpointDto>> {
     let q = queries.get_endpoint_query("E2").ok_or(EdmsError::UnknownError)?;
+    // E2: SELECT endpoint_id, endpoint_str, annotation, method FROM endpoints WHERE endpoint_id = ?
     let rows = core.cproc(q, &[&endpoint_id], |row| {
         Ok(EndpointDto {
-            endpoint_id: row.get(1)?,
-            endpoint_str: row.get(2)?,
-            annotation: row.get(3)?,
+            endpoint_id: row.get(0)?,
+            endpoint_str: row.get(1)?,
+            annotation: row.get(2)?,
+            method: row.get(3)?,
         })
     })?;
     Ok(rows.into_iter().next())
@@ -280,19 +289,20 @@ pub fn endpoints_for_ids(core: &EdmsCore, queries: &QueryMap, ids: &[String]) ->
     // Note: SQLite has a limit on number of parameters (default 999), but for typical use this is fine
     let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
     let query = format!(
-        "SELECT id, endpoint_id, endpoint_str, annotation FROM endpoints WHERE endpoint_id IN ({})",
+        "SELECT endpoint_id, endpoint_str, annotation, method FROM endpoints WHERE endpoint_id IN ({})",
         placeholders.join(", ")
     );
-    
+
     // Convert ids to params
     let params: Vec<&dyn ToSql> = ids.iter().map(|s| s as &dyn ToSql).collect();
-    
+
     // Execute batch query
     let endpoints: Vec<EndpointDto> = core.cproc(&query, params.as_slice(), |row| {
         Ok(EndpointDto {
-            endpoint_id: row.get(1)?,
-            endpoint_str: row.get(2)?,
-            annotation: row.get(3)?,
+            endpoint_id: row.get(0)?,
+            endpoint_str: row.get(1)?,
+            annotation: row.get(2)?,
+            method: row.get(3)?,
         })
     })?;
     

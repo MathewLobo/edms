@@ -16,11 +16,24 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
             endpoint_id TEXT UNIQUE NOT NULL,
             endpoint_str TEXT NOT NULL,
             annotation TEXT,
+            method TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
         [],
     )?;
+
+    // Migration: DBs created before `method` existed won't have picked it up
+    // from CREATE TABLE IF NOT EXISTS above (that's a no-op on an existing
+    // table), so add it explicitly if missing. Safe to run every startup.
+    let has_method: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('endpoints') WHERE name = 'method'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_method == 0 {
+        conn.execute("ALTER TABLE endpoints ADD COLUMN method TEXT", [])?;
+    }
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_endpoints_id ON endpoints(endpoint_id)",
