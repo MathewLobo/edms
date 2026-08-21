@@ -61,6 +61,7 @@ Content-Type: application/json
 }
 
 ### Save a bookmark
+# Side effect: triggers a dashboard snapshot refresh.
 POST {{baseUrl}}/test-view/save/bookmark
 Content-Type: application/json
 
@@ -73,19 +74,22 @@ Content-Type: application/json
 POST {{baseUrl}}/test-view/history/clearall
 
 ### Clear all bookmarks
+# Side effect: triggers a dashboard snapshot refresh.
 POST {{baseUrl}}/test-view/bookmark/clearall
 
 ### WS ONLY — subscribe to live endpoint list: GET /test-view/endpoints/load
 ### WS ONLY — subscribe to live bookmark list:  GET /test-view/bookmarks/load
 ### WS ONLY — run a test (send {"type":"...","payload":{"endpoint_id","method","body","timeout_ms","tick_interval_ms"}}): GET /test-view/run
-### WS ONLY — add a history entry to a bookmark folder: GET /test-view/{bookmark}/add
-### WS ONLY — delete an entry from a bookmark folder:   GET /test-view/{bookmark}/delete
+### WS ONLY — add a history entry to a bookmark folder (also triggers a
+### dashboard snapshot refresh): GET /test-view/{bookmark}/add
+### WS ONLY — delete an entry from a bookmark folder (also triggers a
+### dashboard snapshot refresh): GET /test-view/{bookmark}/delete
 
 # ============================================================
 # Tags
 # ============================================================
-# All three mutating/queried here trigger a live dashboard snapshot refresh
-# on add/remove, same as endpoint create/delete.
+# add/remove (not list or popular) trigger a live dashboard snapshot refresh,
+# same as endpoint create/delete.
 
 ### Add a tag to an endpoint
 POST {{baseUrl}}/tags/get-user-profile/add
@@ -110,9 +114,11 @@ GET {{baseUrl}}/tags/popular
 # ============================================================
 
 ### Snapshot the active workspace's bookmarks into a named collection
+# Side effect: triggers a dashboard snapshot refresh.
 POST {{baseUrl}}/bookmarks/my-collection/create
 
-### WS ONLY — load a bookmark collection into the active workspace: GET /bookmarks/{collection}/load
+### WS ONLY — load a bookmark collection into the active workspace
+### (also triggers a dashboard snapshot refresh): GET /bookmarks/{collection}/load
 
 # ============================================================
 # Data View
@@ -138,8 +144,9 @@ GET {{baseUrl}}/dataview/dashboard
 # ============================================================
 
 ### Latest dashboard snapshot (endpoint/bookmark/tag counts, DB size,
-### storage size, file count) — taken on startup and after every
-### endpoint create/delete.
+### storage size, file count) — taken on startup, and refreshed live after
+### any endpoint create/delete, tag add/remove, or bookmark/collection
+### action (see side-effect notes on those routes above).
 GET {{baseUrl}}/dashboard/snapshot
 
 ### Full snapshot history, oldest first (rolling 30-day retention window)
