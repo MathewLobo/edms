@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
     core.connect().map_err(|e| anyhow::anyhow!("{e:?}"))?;
     initialize_schema_from_core(&core).map_err(|e| anyhow::anyhow!("{e:?}"))?;
 
-    let queries = Arc::new(QueryMap::load_or_default());
+    let queries = Arc::new(QueryMap::load());
     let state = state::AppState::new(core, queries);
 
     let app = Router::new()

@@ -112,3 +112,53 @@ tags:
   T7:
     help: "Get popular tags sorted by usage count"
     query: "SELECT tag, COUNT(*) as count FROM tags GROUP BY tag ORDER BY count DESC"
+
+history:
+  H1:
+    help: "Count total history entries"
+    query: "SELECT COUNT(*) FROM history"
+  
+  H2:
+    help: "Clear all history"
+    query: "DELETE FROM history"
+  
+  H3:
+    help: "Insert history entry"
+    query: "INSERT INTO history (endpoint_id, action, details) VALUES (?, ?, ?)"
+  
+  H4:
+    help: "Get all history endpoint IDs ordered by time"
+    query: "SELECT endpoint_id FROM history ORDER BY timestamp DESC"
+  
+  H5:
+    help: "Get all history entries ordered by time"
+    query: "SELECT id, endpoint_id, action, details, timestamp FROM history ORDER BY timestamp DESC"
+
+bookmarks:
+  B1:
+    help: "Count bookmarks in a specific folder"
+    query: "SELECT COUNT(*) FROM bookmarks WHERE folder = ?"
+  
+  B2:
+    help: "Clear bookmarks in a specific folder"
+    query: "DELETE FROM bookmarks WHERE folder = ?"
+  
+  B3:
+    help: "List endpoint IDs for a specific folder ordered by time"
+    query: "SELECT endpoint_id FROM bookmarks WHERE folder = ? ORDER BY timestamp DESC"
+  
+  B4:
+    help: "Check if a specific bookmark exists"
+    query: "SELECT COUNT(*) FROM bookmarks WHERE folder = ? AND endpoint_id = ?"
+  
+  B5:
+    help: "Insert a new bookmark"
+    query: "INSERT INTO bookmarks (endpoint_id, folder, notes) VALUES (?, ?, ?)"
+  
+  B6:
+    help: "Delete a specific bookmark"
+    query: "DELETE FROM bookmarks WHERE folder = ? AND endpoint_id = ?"
+  
+  B7:
+    help: "Insert a bookmark without notes (for copying)"
+    query: "INSERT INTO bookmarks (endpoint_id, folder, notes) VALUES (?, ?, NULL)"
