@@ -156,6 +156,14 @@ GET {{baseUrl}}/dashboard/snapshot/history
 ### application limits, stability/commit info, external links.
 GET {{baseUrl}}/dashboard/static
 
+### Day-over-day comparison between two arbitrary dates (not necessarily
+### adjacent — e.g. day 1 vs day 6). Dates are "YYYY-MM-DD". 404 if either
+### date has no daily snapshot — response distinguishes "outside the 30-day
+### retention window" from "no data yet" (today/future/app was down that day).
+### Daily snapshots are captured automatically once per calendar-date
+### rollover (a background watcher, not a request you trigger).
+GET {{baseUrl}}/dashboard/compare?from=2026-08-01&to=2026-08-07
+
 ### CRUD Operations breakdown (endpoint segments/tags/bookmarks/history/QP
 ### pairs, grouped by HTTP method with count + % of that row's total).
 ### Ravi's [1] approach: global processing via a compute child process,

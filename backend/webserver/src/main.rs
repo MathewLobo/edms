@@ -1,5 +1,6 @@
 mod config;
 mod dashboard_db;
+mod date_watcher;
 mod db;
 mod events;
 mod handlers;
@@ -24,8 +25,8 @@ use handlers::{
     bookmarks::{create_collection, ws_load_collection},
     callback::ipc_callback,
     dashboard::{
-        get_crud_operations, get_dashboard_snapshot, get_dashboard_snapshot_history,
-        get_static_data, refresh_crud_operations,
+        compare_daily_snapshots, get_crud_operations, get_dashboard_snapshot,
+        get_dashboard_snapshot_history, get_static_data, refresh_crud_operations,
     },
     dataview::{dashboard, delete_folder, merge_folder, ws_make_folder_active},
     endpoints::{create_endpoint, delete_endpoint},
@@ -90,6 +91,37 @@ async fn main() -> anyhow::Result<()> {
         config,
     );
 
+    // Date-change watcher — captures a daily snapshot for the day that just
+    // ended whenever the calendar date actually rolls over. Polls rather
+    // than a true OS push-notification (no portable one exists), but keyed
+    // on comparing the actual date, not a 24h interval, so it can't drift
+    // out of alignment with real calendar days.
+    //
+    // `last_date` starts from the DB's own memory (latest captured daily
+    // snapshot), not blindly from today — so a restart during downtime that
+    // spanned a rollover logs the gap instead of silently losing track of it.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut last_date = {
+                let conn = state.dashboard_conn.lock().unwrap();
+                date_watcher::initial_last_date(&conn, chrono::Utc::now().date_naive())
+            };
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                let current_date = chrono::Utc::now().date_naive();
+                let conn = state.dashboard_conn.lock().unwrap();
+                last_date = date_watcher::check_date_rollover(
+                    &conn,
+                    &state.db_path,
+                    &state.storage_root,
+                    last_date,
+                    current_date,
+                );
+            }
+        });
+    }
+
     let app = Router::new()
         .route("/home", get(home))
         .route("/endpoints/create", post(create_endpoint))
@@ -117,6 +149,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/dashboard/static", get(get_static_data))
         .route("/dashboard/crud-operations", get(get_crud_operations))
         .route("/dashboard/crud-operations/refresh", post(refresh_crud_operations))
+        .route("/dashboard/compare", get(compare_daily_snapshots))
         .route("/tags/popular", get(popular_tags))
         .route("/tags/:endpoint_id", get(list_tags_for_endpoint))
         .route("/tags/:endpoint_id/add", post(add_tag))
