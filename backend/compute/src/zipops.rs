@@ -385,9 +385,9 @@ pub fn merge_sqlitefiles(
     let merge_conn  = Connection::open(&merged_path)?;
 
     for input in input_list {
-        let db_path = find_sqlite(input)?;
+        let db_paths = find_sqlite(input)?;
 
-        if let Some(db) = db_path {
+        for db in db_paths {
             // Skip the output file itself to avoid self-merging.
             if db.canonicalize().ok() == merged_path.canonicalize().ok() {
                 continue;
@@ -472,28 +472,27 @@ pub fn zip_folder(source_dir: &Path, output_file: &Path) -> DynResult<()> {
     Ok(())
 }
 
-fn find_sqlite(input: &Path) -> DynResult<Option<PathBuf>> {
+fn find_sqlite(input: &Path) -> DynResult<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    
     // Bare zip files are not walked here — they should be extracted first.
     if input.is_file() {
-        return Ok(
-            if input.extension().unwrap_or_default() == "sqlite" {
-                Some(input.to_path_buf())
-            } else {
-                None
-            }
-        );
+        if input.extension().unwrap_or_default() == "sqlite" {
+            found.push(input.to_path_buf());
+        }
+        return Ok(found);
     }
 
     for entry in WalkDir::new(input) {
         let entry = entry?;
         let path  = entry.path();
 
-        if path.extension().unwrap_or_default() == "sqlite" {
-            return Ok(Some(path.to_path_buf()));
+        if path.is_file() && path.extension().unwrap_or_default() == "sqlite" {
+            found.push(path.to_path_buf());
         }
     }
 
-    Ok(None)
+    Ok(found)
 }
 
 fn copy_dir_all(src: &Path, dst: &Path) -> DynResult<()> {

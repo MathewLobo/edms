@@ -14,7 +14,7 @@ pub async fn create_collection(
     let res = tokio::task::spawn_blocking({
         let st = state.clone();
         let c = collection.clone();
-        move || db::create_collection_from_active(&st.core, &c)
+        move || db::create_collection_from_active(&st.core, &st.queries, &c)
     })
     .await;
 
@@ -48,7 +48,7 @@ async fn handle_ws_load_collection(mut socket: WebSocket, state: AppState, colle
     let res = tokio::task::spawn_blocking({
         let st = state.clone();
         let c = collection.clone();
-        move || db::load_collection_into_active(&st.core, &c)
+        move || db::load_collection_into_active(&st.core, &st.queries, &c)
     })
     .await;
 
@@ -63,7 +63,7 @@ async fn handle_ws_load_collection(mut socket: WebSocket, state: AppState, colle
             // also emit bookmark count updated
             let count = tokio::task::spawn_blocking({
                 let st = state.clone();
-                move || db::bookmarks_count_active(&st.core)
+                move || db::bookmarks_count_active(&st.core, &st.queries)
             })
             .await
             .ok()

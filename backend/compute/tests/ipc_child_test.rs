@@ -125,8 +125,8 @@ async fn spawn_child_and_send_request(
         stdin.flush()?;
     }
 
-    // Don't wait for child - it will detach
-    tokio::spawn(async move {
+    // Don't wait for child asynchronously on the main reactor - it blocks a tokio thread
+    tokio::task::spawn_blocking(move || {
         let _ = child.wait();
     });
 

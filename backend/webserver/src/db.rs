@@ -3,7 +3,6 @@ use edms::error::{EdmsError, EdmsResult};
 use edms::query_loader::QueryMap;
 use rusqlite::ToSql;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 pub const ACTIVE_FOLDER: &str = "__active__";
 pub const SESSION_BACKUP_FOLDER: &str = "__session_backup__";
@@ -25,12 +24,8 @@ pub fn insert_endpoint(core: &EdmsCore, queries: &QueryMap, ep: &EndpointDto) ->
 
 pub fn list_endpoints(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<Vec<EndpointDto>> {
     let q = queries.get_endpoint_query("E3").ok_or(EdmsError::UnknownError)?;
-    // FIX #8: Use explicit column selection in query or handle by name
-    // Assuming E3 is: SELECT id, endpoint_id, endpoint_str, annotation FROM endpoints
     core.cproc(q, &[], |row| {
         Ok(EndpointDto {
-            // If using positional indices, document the expected query format
-            // Better: ensure your queries.yaml has explicit column order
             endpoint_id: row.get(1)?,
             endpoint_str: row.get(2)?,
             annotation: row.get(3)?,
@@ -96,32 +91,33 @@ pub fn insert_response_metadata(
     core.proc(q, &[&endpoint_id, &request_number, &file_path, &status_code, &response_time_ms])
 }
 
-/* ---------------- history table (direct SQL) ---------------- */
+/* ---------------- history (queries.yaml) ---------------- */
 
-pub fn history_count(core: &EdmsCore) -> EdmsResult<usize> {
-    let q = "SELECT COUNT(*) FROM history";
+pub fn history_count(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<usize> {
+    let q = queries.get_history_query("H1").ok_or(EdmsError::UnknownError)?;
     let rows: Vec<i64> = core.cproc(q, &[], |row| row.get(0))?;
     Ok(rows.first().copied().unwrap_or(0) as usize)
 }
 
-pub fn clear_history(core: &EdmsCore) -> EdmsResult<usize> {
-    core.proc("DELETE FROM history", &[])
+pub fn clear_history(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<usize> {
+    let q = queries.get_history_query("H2").ok_or(EdmsError::UnknownError)?;
+    core.proc(q, &[])
 }
 
-pub fn insert_history(core: &EdmsCore, endpoint_id: &str, action: &str, details: Option<&str>) -> EdmsResult<usize> {
+pub fn insert_history(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str, action: &str, details: Option<&str>) -> EdmsResult<usize> {
+    let q = queries.get_history_query("H3").ok_or(EdmsError::UnknownError)?;
     core.proc(
-        "INSERT INTO history (endpoint_id, action, details) VALUES (?, ?, ?)",
+        q,
         &[&endpoint_id, &action, &details],
     )
 }
 
-pub fn list_history_endpoint_ids(core: &EdmsCore) -> EdmsResult<Vec<String>> {
+pub fn list_history_endpoint_ids(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<Vec<String>> {
     // Most recent first
-    let q = "SELECT endpoint_id FROM history ORDER BY timestamp DESC";
+    let q = queries.get_history_query("H4").ok_or(EdmsError::UnknownError)?;
     core.cproc(q, &[], |row| row.get(0))
 }
 
-// NEW: Get history entries with full details for proper identification
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub id: i64,
@@ -131,8 +127,8 @@ pub struct HistoryEntry {
     pub timestamp: String,
 }
 
-pub fn list_history(core: &EdmsCore) -> EdmsResult<Vec<HistoryEntry>> {
-    let q = "SELECT id, endpoint_id, action, details, timestamp FROM history ORDER BY timestamp DESC";
+pub fn list_history(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<Vec<HistoryEntry>> {
+    let q = queries.get_history_query("H5").ok_or(EdmsError::UnknownError)?;
     core.cproc(q, &[], |row| {
         Ok(HistoryEntry {
             id: row.get(0)?,
@@ -146,27 +142,28 @@ pub fn list_history(core: &EdmsCore) -> EdmsResult<Vec<HistoryEntry>> {
 
 /* ---------------- bookmarks table (direct SQL) ---------------- */
 
-pub fn bookmarks_count_active(core: &EdmsCore) -> EdmsResult<usize> {
-    let q = "SELECT COUNT(*) FROM bookmarks WHERE folder = ?";
+pub fn bookmarks_count_active(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<usize> {
+    let q = queries.get_bookmark_query("B1").ok_or(EdmsError::UnknownError)?;
     let rows: Vec<i64> = core.cproc(q, &[&ACTIVE_FOLDER], |row| row.get(0))?;
     Ok(rows.first().copied().unwrap_or(0) as usize)
 }
 
-pub fn clear_bookmarks_active(core: &EdmsCore) -> EdmsResult<usize> {
-    core.proc("DELETE FROM bookmarks WHERE folder = ?", &[&ACTIVE_FOLDER])
+pub fn clear_bookmarks_active(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<usize> {
+    let q = queries.get_bookmark_query("B2").ok_or(EdmsError::UnknownError)?;
+    core.proc(q, &[&ACTIVE_FOLDER])
 }
 
-pub fn list_bookmarked_endpoints_active(core: &EdmsCore) -> EdmsResult<Vec<String>> {
+pub fn list_bookmarked_endpoints_active(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<Vec<String>> {
     // Returns endpoint_ids in active list
-    let q = "SELECT endpoint_id FROM bookmarks WHERE folder = ? ORDER BY timestamp DESC";
+    let q = queries.get_bookmark_query("B3").ok_or(EdmsError::UnknownError)?;
     core.cproc(q, &[&ACTIVE_FOLDER], |row| row.get(0))
 }
 
-// FIX #5: Use INSERT OR IGNORE to prevent duplicates
-pub fn insert_bookmark_active(core: &EdmsCore, endpoint_id: &str, notes: Option<&str>) -> EdmsResult<usize> {
-    // Check if already bookmarked first (alternative to INSERT OR IGNORE if your schema doesn't have unique constraint)
+pub fn insert_bookmark_active(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str, notes: Option<&str>) -> EdmsResult<usize> {
+    // Check if already bookmarked to avoid duplicates
+    let b4 = queries.get_bookmark_query("B4").ok_or(EdmsError::UnknownError)?;
     let existing: Vec<i64> = core.cproc(
-        "SELECT COUNT(*) FROM bookmarks WHERE folder = ? AND endpoint_id = ?",
+        b4,
         &[&ACTIVE_FOLDER, &endpoint_id],
         |row| row.get(0)
     )?;
@@ -176,37 +173,41 @@ pub fn insert_bookmark_active(core: &EdmsCore, endpoint_id: &str, notes: Option<
         return Ok(0);
     }
     
+    let b5 = queries.get_bookmark_query("B5").ok_or(EdmsError::UnknownError)?;
     core.proc(
-        "INSERT INTO bookmarks (endpoint_id, folder, notes) VALUES (?, ?, ?)",
+        b5,
         &[&endpoint_id, &ACTIVE_FOLDER, &notes],
     )
 }
 
-pub fn delete_bookmark_active(core: &EdmsCore, endpoint_id: &str) -> EdmsResult<usize> {
+pub fn delete_bookmark_active(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str) -> EdmsResult<usize> {
+    let b6 = queries.get_bookmark_query("B6").ok_or(EdmsError::UnknownError)?;
     core.proc(
-        "DELETE FROM bookmarks WHERE folder = ? AND endpoint_id = ?",
+        b6,
         &[&ACTIVE_FOLDER, &endpoint_id],
     )
 }
 
 /* ---------------- collections (folder column) ---------------- */
 
-pub fn create_collection_from_active(core: &EdmsCore, collection: &str) -> EdmsResult<usize> {
+pub fn create_collection_from_active(core: &EdmsCore, queries: &QueryMap, collection: &str) -> EdmsResult<usize> {
     // Copy active bookmarks into folder=collection
-    let endpoint_ids = list_bookmarked_endpoints_active(core)?;
+    let endpoint_ids = list_bookmarked_endpoints_active(core, queries)?;
     let mut inserted = 0usize;
 
     for eid in endpoint_ids {
         // Check for duplicates in target collection too
+        let b4 = queries.get_bookmark_query("B4").ok_or(EdmsError::UnknownError)?;
         let existing: Vec<i64> = core.cproc(
-            "SELECT COUNT(*) FROM bookmarks WHERE folder = ? AND endpoint_id = ?",
+            b4,
             &[&collection, &eid],
             |row| row.get(0)
         )?;
         
         if existing.first().copied().unwrap_or(0) == 0 {
+            let b7 = queries.get_bookmark_query("B7").ok_or(EdmsError::UnknownError)?;
             inserted += core.proc(
-                "INSERT INTO bookmarks (endpoint_id, folder, notes) VALUES (?, ?, NULL)",
+                b7,
                 &[&eid, &collection],
             )?;
         }
@@ -215,79 +216,73 @@ pub fn create_collection_from_active(core: &EdmsCore, collection: &str) -> EdmsR
     Ok(inserted)
 }
 
-// FIX #9: This should ideally use a transaction, but since EdmsCore might not expose
-// transaction API directly, we'll document the limitation and do our best
-pub fn load_collection_into_active(core: &EdmsCore, collection: &str) -> EdmsResult<(bool, usize)> {
-    let active_count = bookmarks_count_active(core)?;
+pub fn load_collection_into_active(core: &EdmsCore, queries: &QueryMap, collection: &str) -> EdmsResult<(bool, usize)> {
+    let active_count = bookmarks_count_active(core, queries)?;
     let moved_to_backup = active_count > 0;
 
     if moved_to_backup {
-        // FIX #10: Clear old backup before creating new one
-        let _ = core.proc("DELETE FROM bookmarks WHERE folder = ?", &[&SESSION_BACKUP_FOLDER]);
+        // Clear old backup before creating new one
+        let b2 = queries.get_bookmark_query("B2").ok_or(EdmsError::UnknownError)?;
+        let _ = core.proc(b2, &[&SESSION_BACKUP_FOLDER]);
         
         // Copy active into backup
-        let endpoint_ids = list_bookmarked_endpoints_active(core)?;
+        let endpoint_ids = list_bookmarked_endpoints_active(core, queries)?;
+        let b7 = queries.get_bookmark_query("B7").ok_or(EdmsError::UnknownError)?;
         for eid in endpoint_ids {
             let _ = core.proc(
-                "INSERT INTO bookmarks (endpoint_id, folder, notes) VALUES (?, ?, NULL)",
+                b7,
                 &[&eid, &SESSION_BACKUP_FOLDER],
             )?;
         }
     }
 
     // Replace active with collection
-    clear_bookmarks_active(core)?;
+    clear_bookmarks_active(core, queries)?;
     
-    let q = "SELECT endpoint_id FROM bookmarks WHERE folder = ? ORDER BY timestamp DESC";
-    let ids: Vec<String> = core.cproc(q, &[&collection], |row| row.get(0))?;
+    let b3 = queries.get_bookmark_query("B3").ok_or(EdmsError::UnknownError)?;
+    let ids: Vec<String> = core.cproc(b3, &[&collection], |row| row.get(0))?;
     let mut loaded = 0usize;
     for eid in ids {
-        loaded += insert_bookmark_active(core, &eid, None)?;
+        loaded += insert_bookmark_active(core, queries, &eid, None)?;
     }
 
     Ok((moved_to_backup, loaded))
 }
 
-// NEW: Restore from session backup
-pub fn restore_from_backup(core: &EdmsCore) -> EdmsResult<usize> {
+pub fn restore_from_backup(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<usize> {
     // Clear current active
-    clear_bookmarks_active(core)?;
+    clear_bookmarks_active(core, queries)?;
     
     // Copy backup to active
-    let q = "SELECT endpoint_id FROM bookmarks WHERE folder = ? ORDER BY timestamp DESC";
-    let ids: Vec<String> = core.cproc(q, &[&SESSION_BACKUP_FOLDER], |row| row.get(0))?;
+    let b3 = queries.get_bookmark_query("B3").ok_or(EdmsError::UnknownError)?;
+    let ids: Vec<String> = core.cproc(b3, &[&SESSION_BACKUP_FOLDER], |row| row.get(0))?;
     
     let mut restored = 0usize;
     for eid in ids {
-        restored += insert_bookmark_active(core, &eid, None)?;
+        restored += insert_bookmark_active(core, queries, &eid, None)?;
     }
     
     Ok(restored)
 }
 
-// NEW: Clear session backup explicitly
-pub fn clear_session_backup(core: &EdmsCore) -> EdmsResult<usize> {
-    core.proc("DELETE FROM bookmarks WHERE folder = ?", &[&SESSION_BACKUP_FOLDER])
+pub fn clear_session_backup(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<usize> {
+    let b2 = queries.get_bookmark_query("B2").ok_or(EdmsError::UnknownError)?;
+    core.proc(b2, &[&SESSION_BACKUP_FOLDER])
 }
 
-// FIX #11: Batch query instead of N+1
-pub fn endpoints_for_ids(core: &EdmsCore, queries: &QueryMap, ids: &[String]) -> EdmsResult<Vec<EndpointDto>> {
+pub fn endpoints_for_ids(core: &EdmsCore, _queries: &QueryMap, ids: &[String]) -> EdmsResult<Vec<EndpointDto>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    
-    // Build a query with placeholders for all IDs
-    // Note: SQLite has a limit on number of parameters (default 999), but for typical use this is fine
+
+    // Build IN clause with one placeholder per id
     let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
     let query = format!(
         "SELECT id, endpoint_id, endpoint_str, annotation FROM endpoints WHERE endpoint_id IN ({})",
         placeholders.join(", ")
     );
-    
-    // Convert ids to params
+
     let params: Vec<&dyn ToSql> = ids.iter().map(|s| s as &dyn ToSql).collect();
-    
-    // Execute batch query
     let endpoints: Vec<EndpointDto> = core.cproc(&query, params.as_slice(), |row| {
         Ok(EndpointDto {
             endpoint_id: row.get(1)?,
@@ -295,7 +290,7 @@ pub fn endpoints_for_ids(core: &EdmsCore, queries: &QueryMap, ids: &[String]) ->
             annotation: row.get(3)?,
         })
     })?;
-    
+
     // Preserve the original order from `ids`
     let mut result = Vec::with_capacity(ids.len());
     for id in ids {
@@ -303,19 +298,6 @@ pub fn endpoints_for_ids(core: &EdmsCore, queries: &QueryMap, ids: &[String]) ->
             result.push(ep.clone());
         }
     }
-    
-    Ok(result)
-}
 
-// Alternative simpler version if the above doesn't work with your EdmsCore API:
-pub fn endpoints_for_ids_simple(core: &EdmsCore, queries: &QueryMap, ids: &[String]) -> EdmsResult<Vec<EndpointDto>> {
-    // Fallback to N queries if batch doesn't work
-    // At least we tried!
-    let mut out = Vec::with_capacity(ids.len());
-    for id in ids {
-        if let Some(ep) = get_endpoint(core, queries, id)? {
-            out.push(ep);
-        }
-    }
-    Ok(out)
+    Ok(result)
 }
