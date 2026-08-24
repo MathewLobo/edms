@@ -42,22 +42,16 @@
 							Home
 						</a>
 						<a
-							href="/testview"
+							href="/webview.html"
 							class="px-5 py-2 font-semibold transition-all duration-300 text-black/80 border-b-2 border-transparent hover:border-black/40"
 						>
-							Test view
+							Cards
 						</a>
 						<a
-							href="/list"
+							href="/listview.html"
 							class="px-5 py-2 font-semibold transition-all duration-300 text-black/80 border-b-2 border-transparent hover:border-black/40"
 						>
-							List view
-						</a>
-						<a
-							href="/webview"
-							class="px-5 py-2 font-semibold transition-all duration-300 text-black border-b-2 border-black hover:border-black/40"
-						>
-							Web view
+							List
 						</a>
 					</div>
 				</div>
@@ -66,9 +60,7 @@
 		<main class="flex-1 flex overflow-hidden bg-[#f5f7fb]">
 			<!-- Left tags column -->
 			<aside class="w-64 p-6 border-r bg-white flex-shrink-0">
-				<div class="text-sm font-semibold text-gray-600 mb-4">
-					SEGMENTS / TAGS
-				</div>
+				<div class="text-sm font-semibold text-gray-600 mb-4">SEGMENTS / TAGS</div>
 				<div
 					class="space-y-3 space-x-3"
 					id="endpoint-tags"
@@ -108,12 +100,6 @@
 							>
 								/api/v1/users/profile
 							</h2>
-							<h3
-								class="px-2 py-1 border border-red-600 bg-red-300 rounded-lg font-bold"
-								id="endpoint-method"
-							>
-								DELETE
-							</h3>
 						</div>
 					</div>
 
@@ -150,9 +136,7 @@
 			</section>
 
 			<!-- Right panels: Request / Response -->
-			<aside
-				class="w-2/5 min-w-[360px] p-6 bg-[#0f1724] text-white overflow-auto"
-			>
+			<aside class="w-2/5 min-w-[360px] p-6 bg-[#0f1724] text-white overflow-auto">
 				<div class="grid grid-cols-1 gap-6">
 					<div class="bg-[#0b1220] rounded-lg p-4 shadow-lg">
 						<div class="text-sm text-green-300 font-semibold mb-2">REQUEST</div>
@@ -182,13 +166,13 @@ responsead</pre
 			// document.write(`Endpoint ID: ${eid}`);
 			let CurrentEndpoint = null;
 			const fetchEndpoint = async (eid) => {
-				CurrentEndpoint = await fetch(`./data/endpoints/${eid}.json`).then(
-					(res) => res.json(),
+				CurrentEndpoint = await fetch(`./data/endpoints/${eid}.json`).then((res) =>
+					res.json(),
 				);
 				// console.log("Fetched endpoint data:", CurrentEndpoint);
-				let endpointStr_grpData = await fetch(
-					"./data/endpointsGrouped.json",
-				).then((res) => res.json());
+				let endpointStr_grpData = await fetch("./data/endpointsGrouped.json").then(
+					(res) => res.json(),
+				);
 				// console.log("Fetched endpointsGrouped data:", endpointStr_grpData);
 				let currentEndpoinSTRData = endpointStr_grpData[CurrentEndpoint.path];
 
@@ -276,8 +260,7 @@ responsead</pre
 					document.querySelector("#endpoint-tags").appendChild(tagElement);
 				});
 
-				document.querySelector("#endpoint-path").textContent =
-					CurrentEndpoint.path;
+				document.querySelector("#endpoint-path").textContent = CurrentEndpoint.path;
 
 				// loadRQno(CurrentEndpoint);
 
@@ -291,15 +274,16 @@ responsead</pre
 			const loadRQno = async (endpoint, detailDiv) => {
 				const QPListDiv = document.createElement("div");
 				QPListDiv.className = "space-y-4 QP-list";
-				for(let i =0 ; i< endpoint.qpPairs;i++){
+				for (let i = 0; i < endpoint.qpPairs; i++) {
 					const innerDiv = document.createElement("div");
-					innerDiv.className = "flex items-start gap-4 px-2 cursor-pointer rounded-md hover:bg-gray-100";
+					innerDiv.className =
+						"flex items-start gap-4 px-2 cursor-pointer rounded-md hover:bg-gray-100";
 					QPListDiv.appendChild(innerDiv);
 					innerDiv.innerHTML = `
 								<div
 									class="p-2 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-semibold rqno"
 								>
-									QP ${i+1}
+									QP ${i + 1}
 								</div>
 								<div class="flex-1">
 									<div class="font-semibold">GET</div>
@@ -307,16 +291,18 @@ responsead</pre
 										TAGS: auth, session-token
 									</div>
 								</div>
-							`
-					innerDiv.querySelector(".rqno").addEventListener("click", () => {{
-						// remove active class from all rqno elements
-						document.querySelectorAll(".rqno").forEach((el) => {
-							el.classList.remove("active");
-						});
-						// add active class to clicked element
-						innerDiv.querySelector(".rqno").classList.add("active");
-						loadreqPanel(endpoint.eid, i);
-					}});		
+							`;
+					innerDiv.querySelector(".rqno").addEventListener("click", () => {
+						{
+							// remove active class from all rqno elements
+							document.querySelectorAll(".rqno").forEach((el) => {
+								el.classList.remove("active");
+							});
+							// add active class to clicked element
+							innerDiv.querySelector(".rqno").classList.add("active");
+							loadreqPanel(endpoint.eid, i);
+						}
+					});
 				}
 				detailDiv.appendChild(QPListDiv);
 			};
@@ -366,9 +352,9 @@ responsead</pre
 					).then((res) => res.json());
 					console.log("Received request data:", responseD);
 				} catch (error) {
-					responseD = await fetch(
-						`./data/requests/E0006-GL-request1.json`,
-					).then((res) => res.json());
+					responseD = await fetch(`./data/requests/E0006-GL-request1.json`).then(
+						(res) => res.json(),
+					);
 					console.log("loaded default request data due to error:", error);
 				}
 
@@ -400,9 +386,9 @@ responsead</pre
 					).then((res) => res.json());
 					console.log("Received response data:", responseD);
 				} catch (error) {
-					responseD = await fetch(
-						`./data/responses/E0006-GL-response1.json`,
-					).then((res) => res.json());
+					responseD = await fetch(`./data/responses/E0006-GL-response1.json`).then(
+						(res) => res.json(),
+					);
 					console.log("loaded default response data due to error:", error);
 				}
 
