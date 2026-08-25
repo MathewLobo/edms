@@ -112,3 +112,65 @@ tags:
   T7:
     help: "Get popular tags sorted by usage count"
     query: "SELECT tag, COUNT(*) as count FROM tags GROUP BY tag ORDER BY count DESC"
+
+# Catalog tables: which collections/webviews/repoviews exist and where their
+# independent SQLite file lives (per Ravi, 2026-08-25).
+catalog:
+  COLLECTIONS_CREATE:
+    help: "Register a new collection in the catalog"
+    query: "INSERT INTO collections (name, file_path) VALUES (?, ?)"
+  COLLECTIONS_LIST:
+    help: "List all registered collections"
+    query: "SELECT name, file_path, created_at FROM collections ORDER BY name"
+  WEBVIEW_CREATE:
+    help: "Register a new webview in the catalog"
+    query: "INSERT INTO webview (name, file_path) VALUES (?, ?)"
+  WEBVIEW_LIST:
+    help: "List all registered webviews"
+    query: "SELECT name, file_path, created_at FROM webview ORDER BY name"
+  REPOVIEW_CREATE:
+    help: "Register a new repoview in the catalog"
+    query: "INSERT INTO repoview (name, file_path) VALUES (?, ?)"
+  REPOVIEW_LIST:
+    help: "List all registered repoviews"
+    query: "SELECT name, file_path, created_at FROM repoview ORDER BY name"
+
+# Central per-view-type tag count rollups (tagname, count) — incrementally
+# maintained counters, not a full tag entity with membership tracking.
+view_tag_counts:
+  COLLECTIONS_UPSERT:
+    help: "Create a collections tag, or add to its count if it already exists"
+    query: "INSERT INTO collections_tags (tagname, count) VALUES (?, ?) ON CONFLICT(tagname) DO UPDATE SET count = count + excluded.count"
+  COLLECTIONS_GET:
+    help: "Get a collections tag's current count"
+    query: "SELECT count FROM collections_tags WHERE tagname = ?"
+  COLLECTIONS_DELETE:
+    help: "Delete a collections tag"
+    query: "DELETE FROM collections_tags WHERE tagname = ?"
+  COLLECTIONS_LIST_TAGS:
+    help: "List all collections tags with their counts"
+    query: "SELECT tagname, count FROM collections_tags ORDER BY tagname"
+  WEBVIEW_UPSERT:
+    help: "Create a webview tag, or add to its count if it already exists"
+    query: "INSERT INTO webview_tags (tagname, count) VALUES (?, ?) ON CONFLICT(tagname) DO UPDATE SET count = count + excluded.count"
+  WEBVIEW_GET:
+    help: "Get a webview tag's current count"
+    query: "SELECT count FROM webview_tags WHERE tagname = ?"
+  WEBVIEW_DELETE:
+    help: "Delete a webview tag"
+    query: "DELETE FROM webview_tags WHERE tagname = ?"
+  WEBVIEW_LIST_TAGS:
+    help: "List all webview tags with their counts"
+    query: "SELECT tagname, count FROM webview_tags ORDER BY tagname"
+  REPOVIEW_UPSERT:
+    help: "Create a repoview tag, or add to its count if it already exists"
+    query: "INSERT INTO repoview_tags (tagname, count) VALUES (?, ?) ON CONFLICT(tagname) DO UPDATE SET count = count + excluded.count"
+  REPOVIEW_GET:
+    help: "Get a repoview tag's current count"
+    query: "SELECT count FROM repoview_tags WHERE tagname = ?"
+  REPOVIEW_DELETE:
+    help: "Delete a repoview tag"
+    query: "DELETE FROM repoview_tags WHERE tagname = ?"
+  REPOVIEW_LIST_TAGS:
+    help: "List all repoview tags with their counts"
+    query: "SELECT tagname, count FROM repoview_tags ORDER BY tagname"

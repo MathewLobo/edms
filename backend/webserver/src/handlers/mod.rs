@@ -11,3 +11,5 @@ pub mod repo;
 pub mod tags;
 pub mod test_view;
 pub mod view;
+pub mod view_catalog;
+pub mod view_tags;

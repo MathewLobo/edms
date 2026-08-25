@@ -178,5 +178,40 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
         [],
     )?;
 
+    // Catalog tables — registers which collections/webviews/repoviews exist.
+    // Per Ravi (2026-08-25): each one's actual endpoint data + its own local
+    // tags/endpoint-segments tables live in an independent SQLite file;
+    // file_path points to it. That per-view-instance file isn't created by
+    // this pass yet — file_path is nullable until that infrastructure lands.
+    for table in ["collections", "webview", "repoview"] {
+        conn.execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS {table} (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    file_path TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )"
+            ),
+            [],
+        )?;
+    }
+
+    // Central tag-count rollups, one table per view type — a simple
+    // incrementally-maintained counter (tagname, count), not a full entity
+    // with a membership table. Global per view-type, not per collection
+    // instance (matches the dashboard's existing aggregate-count model).
+    for table in ["collections_tags", "webview_tags", "repoview_tags"] {
+        conn.execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS {table} (
+                    tagname TEXT NOT NULL UNIQUE,
+                    count INTEGER NOT NULL DEFAULT 0
+                )"
+            ),
+            [],
+        )?;
+    }
+
     Ok(())
 }

@@ -39,6 +39,15 @@ use handlers::{
         ws_load_endpoints, ws_run,
     },
     view::{home, list_view, test_view},
+    view_catalog::{
+        create_collection_entry, create_repoview_entry, create_webview_entry, list_collections,
+        list_repoviews, list_webviews,
+    },
+    view_tags::{
+        create_collections_tag, create_repoview_tag, create_webview_tag, delete_collections_tags,
+        delete_repoview_tags, delete_webview_tags, list_collections_tags, list_repoview_tags,
+        list_webview_tags, rename_collections_tag, rename_repoview_tag, rename_webview_tag,
+    },
 };
 
 #[tokio::main]
@@ -150,6 +159,24 @@ async fn main() -> anyhow::Result<()> {
         .route("/dashboard/crud-operations", get(get_crud_operations))
         .route("/dashboard/crud-operations/refresh", post(refresh_crud_operations))
         .route("/dashboard/compare", get(compare_daily_snapshots))
+        .route("/collections/create", post(create_collection_entry))
+        .route("/collections/list", get(list_collections))
+        .route("/collections/tags/create", post(create_collections_tag))
+        .route("/collections/tags/delete", post(delete_collections_tags))
+        .route("/collections/tags/rename", post(rename_collections_tag))
+        .route("/collections/tags/list", get(list_collections_tags))
+        .route("/webview/create", post(create_webview_entry))
+        .route("/webview/list", get(list_webviews))
+        .route("/webview/tags/create", post(create_webview_tag))
+        .route("/webview/tags/delete", post(delete_webview_tags))
+        .route("/webview/tags/rename", post(rename_webview_tag))
+        .route("/webview/tags/list", get(list_webview_tags))
+        .route("/repoview/create", post(create_repoview_entry))
+        .route("/repoview/list", get(list_repoviews))
+        .route("/repoview/tags/create", post(create_repoview_tag))
+        .route("/repoview/tags/delete", post(delete_repoview_tags))
+        .route("/repoview/tags/rename", post(rename_repoview_tag))
+        .route("/repoview/tags/list", get(list_repoview_tags))
         .route("/tags/popular", get(popular_tags))
         .route("/tags/:endpoint_id", get(list_tags_for_endpoint))
         .route("/tags/:endpoint_id/add", post(add_tag))

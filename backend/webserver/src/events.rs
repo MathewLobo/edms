@@ -37,4 +37,6 @@ pub enum ServerEvent {
         request_number: i32,
         elapsed_ms: u64,
     },
+
+    ViewTagsUpdated { view: String },
 }
