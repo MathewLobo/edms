@@ -57,7 +57,7 @@ pub async fn save_history(
 
     let res = tokio::task::spawn_blocking({
         let st = state.clone();
-        move || db::insert_history(&st.core, &endpoint_id, &action, details.as_deref())
+        move || db::insert_history(&st.core, &st.queries, &endpoint_id, &action, details.as_deref())
     })
     .await;
 
@@ -65,7 +65,7 @@ pub async fn save_history(
         Ok(Ok(_)) => {
             let count = tokio::task::spawn_blocking({
                 let st = state.clone();
-                move || db::history_count(&st.core)
+                move || db::history_count(&st.core, &st.queries)
             })
             .await
             .unwrap_or(Ok(0))
@@ -94,7 +94,7 @@ pub async fn save_bookmark(
 
     let res = tokio::task::spawn_blocking({
         let st = state.clone();
-        move || db::insert_bookmark_active(&st.core, &endpoint_id, notes.as_deref())
+        move || db::insert_bookmark_active(&st.core, &st.queries, &endpoint_id, notes.as_deref())
     })
     .await;
 
@@ -102,7 +102,7 @@ pub async fn save_bookmark(
         Ok(Ok(_)) => {
             let count = tokio::task::spawn_blocking({
                 let st = state.clone();
-                move || db::bookmarks_count_active(&st.core)
+                move || db::bookmarks_count_active(&st.core, &st.queries)
             })
             .await
             .unwrap_or(Ok(0))
@@ -146,7 +146,7 @@ pub async fn ws_delete_from_bookmark(
 pub async fn clear_history(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
     let res = tokio::task::spawn_blocking({
         let st = state.clone();
-        move || db::clear_history(&st.core)
+        move || db::clear_history(&st.core, &st.queries)
     })
     .await;
 
@@ -169,7 +169,7 @@ pub async fn clear_history(State(state): State<AppState>) -> (StatusCode, Json<s
 pub async fn clear_bookmarks(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
     let res = tokio::task::spawn_blocking({
         let st = state.clone();
-        move || db::clear_bookmarks_active(&st.core)
+        move || db::clear_bookmarks_active(&st.core, &st.queries)
     })
     .await;
 
@@ -390,7 +390,7 @@ async fn handle_ws_subscribe_bookmarks(mut socket: WebSocket, state: AppState) {
     let bookmarks = tokio::task::spawn_blocking({
         let st = state.clone();
         move || {
-            let ids = db::list_bookmarked_endpoints_active(&st.core)?;
+            let ids = db::list_bookmarked_endpoints_active(&st.core, &st.queries)?;
             db::endpoints_for_ids(&st.core, &st.queries, &ids)
         }
     })
@@ -428,7 +428,7 @@ async fn handle_ws_add_from_history(mut socket: WebSocket, state: AppState, _boo
         let res = tokio::task::spawn_blocking({
             let st = state.clone();
             let eid = endpoint_id.clone();
-            move || db::insert_bookmark_active(&st.core, &eid, None)
+            move || db::insert_bookmark_active(&st.core, &st.queries, &eid, None)
         })
         .await;
 
@@ -436,7 +436,7 @@ async fn handle_ws_add_from_history(mut socket: WebSocket, state: AppState, _boo
             Ok(Ok(_)) => {
                 let count = tokio::task::spawn_blocking({
                     let st = state.clone();
-                    move || db::bookmarks_count_active(&st.core)
+                    move || db::bookmarks_count_active(&st.core, &st.queries)
                 })
                 .await
                 .unwrap_or(Ok(0))
@@ -470,7 +470,7 @@ async fn handle_ws_delete_from_bookmark(mut socket: WebSocket, state: AppState, 
         let res = tokio::task::spawn_blocking({
             let st = state.clone();
             let eid = endpoint_id.clone();
-            move || db::delete_bookmark_active(&st.core, &eid)
+            move || db::delete_bookmark_active(&st.core, &st.queries, &eid)
         })
         .await;
 
@@ -478,7 +478,7 @@ async fn handle_ws_delete_from_bookmark(mut socket: WebSocket, state: AppState, 
             Ok(Ok(_)) => {
                 let count = tokio::task::spawn_blocking({
                     let st = state.clone();
-                    move || db::bookmarks_count_active(&st.core)
+                    move || db::bookmarks_count_active(&st.core, &st.queries)
                 })
                 .await
                 .unwrap_or(Ok(0))

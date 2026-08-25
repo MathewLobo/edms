@@ -90,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!("Failed to rotate old snapshots on startup: {e}"),
     }
 
-    let queries = Arc::new(QueryMap::load_or_default());
+    let queries = Arc::new(QueryMap::load());
     let state = state::AppState::new(
         core,
         queries,

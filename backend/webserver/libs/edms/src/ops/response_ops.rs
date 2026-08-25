@@ -12,7 +12,7 @@ impl ResponseOps {
     pub fn new(db_path: &str) -> Self {
         ResponseOps {
             core: EdmsCore::new(db_path),
-            queries: Arc::new(QueryMap::load_or_default()),
+            queries: Arc::new(QueryMap::load()),
         }
     }
 

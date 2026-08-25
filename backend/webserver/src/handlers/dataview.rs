@@ -128,8 +128,8 @@ pub async fn dashboard(State(state): State<AppState>) -> (StatusCode, Json<serde
             let endpoints = db::list_endpoints(&st.core, &st.queries)
                 .map(|v| v.len())
                 .unwrap_or(0);
-            let bookmarks = db::bookmarks_count_active(&st.core).unwrap_or(0);
-            let history = db::history_count(&st.core).unwrap_or(0);
+            let bookmarks = db::bookmarks_count_active(&st.core, &st.queries).unwrap_or(0);
+            let history = db::history_count(&st.core, &st.queries).unwrap_or(0);
             (endpoints, bookmarks, history)
         }
     })

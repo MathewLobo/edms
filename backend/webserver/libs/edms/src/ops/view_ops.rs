@@ -36,7 +36,7 @@ impl ViewCatalogOps {
     pub fn new(db_path: &str) -> Self {
         ViewCatalogOps {
             core: EdmsCore::new(db_path),
-            queries: Arc::new(QueryMap::load_or_default()),
+            queries: Arc::new(QueryMap::load()),
         }
     }
 
@@ -73,7 +73,7 @@ impl ViewTagCountOps {
     pub fn new(db_path: &str) -> Self {
         ViewTagCountOps {
             core: EdmsCore::new(db_path),
-            queries: Arc::new(QueryMap::load_or_default()),
+            queries: Arc::new(QueryMap::load()),
         }
     }
 
