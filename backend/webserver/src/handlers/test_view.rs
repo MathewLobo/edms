@@ -337,13 +337,20 @@ async fn run_test_impl(
         request_number,
     });
 
-    // 6) Start timer
-    let _timer_handle = timer::spawn_timer(
+    // 6) Start timer — keep the handle so callback.rs can cancel it once
+    //    the real outcome (success or timeout) is known, instead of letting
+    //    it tick on its own independent schedule.
+    let timer_handle = timer::spawn_timer(
         endpoint_id.to_string(),
         request_number,
         timer_cfg.clone(),
         state.events_tx.clone(),
     );
+    state
+        .active_timers
+        .lock()
+        .unwrap()
+        .insert((endpoint_id.to_string(), request_number), timer_handle);
 
     // 7) Spawn edms-child for the actual HTTP test call
     //    This is the original run_test task — unchanged

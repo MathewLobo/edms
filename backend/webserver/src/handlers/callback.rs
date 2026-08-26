@@ -67,6 +67,10 @@ async fn handle_run_test(state: &AppState, callback: &IpcCallback) {
 
     // Timeout path
     if r.get("timed_out").and_then(|v| v.as_bool()).unwrap_or(false) {
+        // Cancel the app's own independent timer — it's on the same
+        // timeout_ms but a separate schedule, so without this it can still
+        // fire its own TestTimeout a tick later (duplicate event).
+        state.cancel_timer(&endpoint_id, request_number);
         let _ = state.events_tx.send(ServerEvent::TestTimeout {
             endpoint_id,
             request_number,
@@ -119,6 +123,10 @@ async fn handle_run_test(state: &AppState, callback: &IpcCallback) {
             Err(e) => warn!("[callback] failed to join insert_response_metadata task: {e}"),
         }
     }
+
+    // Test finished for real — stop the app's own countdown so it doesn't
+    // keep emitting TimerTick after the fact.
+    state.cancel_timer(&endpoint_id, request_number);
 
     // Broadcast TestFinished — WS clients update immediately
     let _ = state.events_tx.send(ServerEvent::TestFinished {
