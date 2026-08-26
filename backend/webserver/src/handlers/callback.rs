@@ -77,7 +77,10 @@ async fn handle_run_test(state: &AppState, callback: &IpcCallback) {
     let status_code      = r["status_code"].as_i64().unwrap_or(0) as i32;
     let response_time_ms = r["response_time_ms"].as_i64().unwrap_or(0) as i32;
     let response_body    = r.get("response_body").cloned().unwrap_or(serde_json::Value::Null);
-    let response_file    = format!("edms_data/{}/response-{:03}.json", endpoint_id, request_number);
+    // Must match the {eid}-response-{N}.json filename write_response_file
+    // actually produces (compute::endpoint_writer) — see the matching note
+    // on request_file in test_view.rs.
+    let response_file    = format!("edms_data/{}/{}-response-{}.json", endpoint_id, endpoint_id, request_number);
 
     // Spawn edms-child to write the response file to disk
     crate::ipc::spawn_child(

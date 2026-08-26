@@ -302,7 +302,10 @@ async fn run_test_impl(
 
     // 3) Insert request metadata into DB
     let method_upper = method.to_uppercase();
-    let request_file = format!("edms_data/{}/request-{:03}.json", endpoint_id, request_number);
+    // Must match the {eid}-request-{N}.json filename write_request_file
+    // actually produces (compute::endpoint_writer) — these two were out of
+    // sync before, meaning the file this points at didn't exist.
+    let request_file = format!("edms_data/{}/{}-request-{}.json", endpoint_id, endpoint_id, request_number);
 
     tokio::task::spawn_blocking({
         let st = state.clone();

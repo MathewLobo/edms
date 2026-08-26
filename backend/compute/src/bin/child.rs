@@ -13,11 +13,11 @@ use std::time::Instant;
 use compute::api::handlers::{
     BookmarkRequest, CrudOperationsRequest, EndpointWriteRequest, ExportCollectionRequest,
     ExportMergeRequest, ImportZipRequest, MarkActiveFolderRequest, MarkdownRequest, MetaRequest,
-    RequestDoc, ResponseDoc, StaticCreateRequest, StaticExportRequest,
+    RequestDoc, ResponseDoc, RunTestRequest, StaticCreateRequest, StaticExportRequest,
     compute_crud_operations_inner, create_static_inner, export_bookmarks_inner,
     export_collection_inner, export_merge_inner, export_static_inner, generate_markdown_inner,
-    generate_meta_inner, import_zip_inner, mark_active_folder_inner, write_endpoint_inner,
-    write_request_inner, write_response_inner,
+    generate_meta_inner, import_zip_inner, mark_active_folder_inner, run_test_inner,
+    write_endpoint_inner, write_request_inner, write_response_inner,
 };
 
 // IpcRequest/IpcCallback are defined in Tara's ipc.rs.
@@ -149,6 +149,8 @@ async fn dispatch(task: &str, payload: Value) -> (bool, Value, Option<String>) {
             })
             .await
         }
+
+        "run_test" => run(payload, |p: RunTestRequest| run_test_inner(p)).await,
 
         unknown => {
             let msg = format!("unknown task: '{}'", unknown);

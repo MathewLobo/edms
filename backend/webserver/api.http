@@ -121,6 +121,120 @@ POST {{baseUrl}}/bookmarks/my-collection/create
 ### (also triggers a dashboard snapshot refresh): GET /bookmarks/{collection}/load
 
 # ============================================================
+# Collections / Webview / Repoview
+# ============================================================
+# Catalog (which collections/webviews/repoviews exist) + a per-view
+# tagname+count table — a simple incrementally-maintained counter, not a
+# full tag entity with membership tracking. Per Ravi's schema, 2026-08-25.
+#
+# create/delete/rename on the tags routes all trigger a dashboard snapshot
+# refresh AND broadcast a ViewTagsUpdated event on the app's single shared
+# WS channel (same channel /test-view/run uses) — connect there to know
+# when to re-fetch the matching */tags/list route below, per the WS-vs-REST
+# rule: WS only triggers a refresh, REST delivers the actual data.
+#
+# WS event shape:
+#   {"type":"event","event":{"type":"ViewTagsUpdated","payload":{"view":"collections"}}}
+#   "view" is one of "collections" | "webview" | "repoview".
+#
+# Not built yet: bookmarks/eqptags (same pattern is planned for it), the
+# "merge" operation, and the per-collection independent SQLite file
+# (file_path on the catalog entry stays null until that exists).
+
+### Register a new collection in the catalog
+POST {{baseUrl}}/collections/create
+Content-Type: application/json
+
+{ "name": "auth-suite" }
+
+### List registered collections
+GET {{baseUrl}}/collections/list
+
+### Create a collections tag, or add to its count if it already exists
+# "endpoint_ids" length becomes the count increment (defaults to 1 if omitted/empty).
+POST {{baseUrl}}/collections/tags/create
+Content-Type: application/json
+
+{ "name": "auth", "endpoint_ids": ["E1", "E2"] }
+
+### Delete one or more collections tags in one call
+POST {{baseUrl}}/collections/tags/delete
+Content-Type: application/json
+
+{ "names": ["auth"] }
+
+### Rename a collections tag — its count carries over to the new name
+POST {{baseUrl}}/collections/tags/rename
+Content-Type: application/json
+
+{ "old_name": "auth", "new_name": "authn" }
+
+### List collections tags with their counts
+GET {{baseUrl}}/collections/tags/list
+
+### --- Same four "tags" routes + catalog create/list, scoped to webview ---
+
+POST {{baseUrl}}/webview/create
+Content-Type: application/json
+
+{ "name": "wtest" }
+
+### List registered webviews
+GET {{baseUrl}}/webview/list
+
+### Create a webview tag, or add to its count if it already exists
+POST {{baseUrl}}/webview/tags/create
+Content-Type: application/json
+
+{ "name": "auth", "endpoint_ids": ["E1"] }
+
+### Delete one or more webview tags in one call
+POST {{baseUrl}}/webview/tags/delete
+Content-Type: application/json
+
+{ "names": ["auth"] }
+
+### Rename a webview tag
+POST {{baseUrl}}/webview/tags/rename
+Content-Type: application/json
+
+{ "old_name": "auth", "new_name": "authn" }
+
+### List webview tags with their counts
+GET {{baseUrl}}/webview/tags/list
+
+### --- Same four "tags" routes + catalog create/list, scoped to repoview ---
+
+POST {{baseUrl}}/repoview/create
+Content-Type: application/json
+
+{ "name": "rtest" }
+
+### List registered repoviews
+GET {{baseUrl}}/repoview/list
+
+### Create a repoview tag, or add to its count if it already exists
+POST {{baseUrl}}/repoview/tags/create
+Content-Type: application/json
+
+{ "name": "auth", "endpoint_ids": ["E1"] }
+
+### Delete one or more repoview tags in one call
+POST {{baseUrl}}/repoview/tags/delete
+Content-Type: application/json
+
+{ "names": ["auth"] }
+
+### Rename a repoview tag
+POST {{baseUrl}}/repoview/tags/rename
+Content-Type: application/json
+
+{ "old_name": "auth", "new_name": "authn" }
+
+### List repoview tags with their counts
+GET {{baseUrl}}/repoview/tags/list
+
+# ============================================================
 # Data View
 # ============================================================
 
