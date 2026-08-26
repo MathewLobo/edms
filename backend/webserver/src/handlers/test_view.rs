@@ -506,3 +506,59 @@ async fn handle_ws_delete_from_bookmark(mut socket: WebSocket, state: AppState, 
         }
     }
 }
+
+// ── Fetch a saved request/response body ─────────────────────────────────
+//
+// TestFinished only carries status_code/response_time_ms/response_file — a
+// server-side path, not the actual content. These routes are the missing
+// second half of the WS-trigger-then-REST-fetch pattern: the client uses
+// endpoint_id + request_number (already known from TestFinished) to pull
+// the real body. Deliberately NOT taking a raw path from the client —
+// that would be a path-traversal risk. The server builds the path itself,
+// the same way test_view.rs/callback.rs already do when writing it.
+
+fn safe_id(id: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if id.is_empty() || id.contains("..") || id.contains('/') || id.contains('\\') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": "invalid endpoint_id" })),
+        ));
+    }
+    Ok(())
+}
+
+async fn read_saved_file(
+    endpoint_id: &str,
+    request_number: i64,
+    kind: &str,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if let Err(e) = safe_id(endpoint_id) {
+        return e;
+    }
+    let path = format!("edms_data/{endpoint_id}/{endpoint_id}-{kind}-{request_number}.json");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(content) => {
+            let body: serde_json::Value =
+                serde_json::from_str(&content).unwrap_or(serde_json::Value::String(content));
+            (StatusCode::OK, Json(json!({ "ok": true, "body": body })))
+        }
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "error": format!("no saved {kind} for {endpoint_id}#{request_number}: {e}") })),
+        ),
+    }
+}
+
+/// GET /test-view/{endpoint_id}/request/{request_number}
+pub async fn get_saved_request(
+    Path((endpoint_id, request_number)): Path<(String, i64)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    read_saved_file(&endpoint_id, request_number, "request").await
+}
+
+/// GET /test-view/{endpoint_id}/response/{request_number}
+pub async fn get_saved_response(
+    Path((endpoint_id, request_number)): Path<(String, i64)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    read_saved_file(&endpoint_id, request_number, "response").await
+}
