@@ -16,11 +16,24 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
             endpoint_id TEXT UNIQUE NOT NULL,
             endpoint_str TEXT NOT NULL,
             annotation TEXT,
+            method TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
         [],
     )?;
+
+    // Migration: DBs created before `method` existed won't have picked it up
+    // from CREATE TABLE IF NOT EXISTS above (that's a no-op on an existing
+    // table), so add it explicitly if missing. Safe to run every startup.
+    let has_method: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('endpoints') WHERE name = 'method'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_method == 0 {
+        conn.execute("ALTER TABLE endpoints ADD COLUMN method TEXT", [])?;
+    }
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_endpoints_id ON endpoints(endpoint_id)",
@@ -164,6 +177,41 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_history_action ON history(action)",
         [],
     )?;
+
+    // Catalog tables — registers which collections/webviews/repoviews exist.
+    // Per Ravi (2026-08-25): each one's actual endpoint data + its own local
+    // tags/endpoint-segments tables live in an independent SQLite file;
+    // file_path points to it. That per-view-instance file isn't created by
+    // this pass yet — file_path is nullable until that infrastructure lands.
+    for table in ["collections", "webview", "repoview"] {
+        conn.execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS {table} (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    file_path TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )"
+            ),
+            [],
+        )?;
+    }
+
+    // Central tag-count rollups, one table per view type — a simple
+    // incrementally-maintained counter (tagname, count), not a full entity
+    // with a membership table. Global per view-type, not per collection
+    // instance (matches the dashboard's existing aggregate-count model).
+    for table in ["collections_tags", "webview_tags", "repoview_tags"] {
+        conn.execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS {table} (
+                    tagname TEXT NOT NULL UNIQUE,
+                    count INTEGER NOT NULL DEFAULT 0
+                )"
+            ),
+            [],
+        )?;
+    }
 
     Ok(())
 }

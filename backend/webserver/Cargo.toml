@@ -26,3 +26,4 @@ anyhow = "1.0"
 reqwest = { version = "0.11", features = ["json", "blocking"] }
 rusqlite = { version = "0.38.0", features = ["bundled"] }
 edms = { path = "libs/edms" }
+chrono = { version = "0.4", features = ["serde"] }

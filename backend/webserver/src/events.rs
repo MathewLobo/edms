@@ -22,6 +22,7 @@ pub enum ServerEvent {
     Error { message: String },
 
     ExportReady { message: String },
+    CrudOperationsUpdated { computed_at: String },
     TimerTick {
         endpoint_id: String,
         request_number: i32,
@@ -36,4 +37,6 @@ pub enum ServerEvent {
         request_number: i32,
         elapsed_ms: u64,
     },
+
+    ViewTagsUpdated { view: String },
 }

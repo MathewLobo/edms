@@ -1,8 +1,19 @@
 server:
   host: "0.0.0.0"
-  port: 8080
+  port: 3000
 
 limits:
-  max_endpoints: 10
-  max_requests_per_minute: 120
-  max_response_size_bytes: 1048576
+  max_endpoints: 50000
+  max_requests_per_minute: 100
+  max_response_size_bytes: 10485760
+  max_latency_ms: 5000
+
+stability:
+  stable_commit: "f364cb6"
+  stable_commit_timestamp: "2026-08-18T00:00:00Z"
+  stability_check_timestamp: "2026-08-18T00:00:00Z"
+
+links:
+  github: "https://github.com/hashedtokens/edms"
+  dockerhub: "https://hub.docker.com/r/hashedtokens/edms"
+  wiki: "https://github.com/hashedtokens/edms/wiki"
