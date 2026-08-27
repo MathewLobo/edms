@@ -223,6 +223,7 @@ dependencies = [
  "anyhow",
  "axum",
  "chrono",
+ "edms",
  "futures-util",
  "portpicker",
  "reqwest",
@@ -346,6 +347,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "edms"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
