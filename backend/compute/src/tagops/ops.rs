@@ -44,7 +44,7 @@ pub fn bulk_add_tags(req: BulkTagRequest, log: &mut Vec<ActivityEntry>) -> DynRe
     let t1 = queries.get_tag_query("T1").ok_or("missing query T1")?;
     for eid in &req.endpoint_ids {
         for tag in &req.tags {
-            let _ = core.proc(t1, &[eid, tag]);
+            core.proc(t1, &[eid, tag])?;
         }
     }
     log_entry(log, "Bulk-add complete.".to_string());

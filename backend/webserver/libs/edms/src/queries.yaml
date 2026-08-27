@@ -86,8 +86,8 @@ responses:
 
 tags:
   T1:
-    help: "Insert a tag for an endpoint"
-    query: "INSERT INTO tags (endpoint_id, tag) VALUES (?, ?)"
+    help: "Insert a tag for an endpoint (idempotent)"
+    query: "INSERT OR IGNORE INTO tags (endpoint_id, tag) VALUES (?, ?)"
 
   T2:
     help: "Get all tags for an endpoint"
