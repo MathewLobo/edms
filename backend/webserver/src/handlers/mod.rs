@@ -1,9 +1,15 @@
 pub mod health;
 pub mod hello;
 pub mod echo;
+pub mod endpoints;
 pub mod bookmarks;
 pub mod callback;
+pub mod dashboard;
 pub mod dataview;
+pub mod logs;
 pub mod repo;
+pub mod tags;
 pub mod test_view;
 pub mod view;
+pub mod view_catalog;
+pub mod view_tags;

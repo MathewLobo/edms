@@ -11,12 +11,13 @@ use std::time::Instant;
 
 // Re-use all the handler inner functions and request types
 use compute::api::handlers::{
-    BookmarkRequest, EndpointWriteRequest, ExportCollectionRequest, ExportMergeRequest,
-    ImportZipRequest, MarkActiveFolderRequest, MarkdownRequest, MetaRequest, RequestDoc,
-    ResponseDoc, StaticCreateRequest, StaticExportRequest, create_static_inner,
-    export_bookmarks_inner, export_collection_inner, export_merge_inner, export_static_inner,
-    generate_markdown_inner, generate_meta_inner, import_zip_inner, mark_active_folder_inner,
-    write_endpoint_inner, write_request_inner, write_response_inner,
+    BookmarkRequest, CrudOperationsRequest, EndpointWriteRequest, ExportCollectionRequest,
+    ExportMergeRequest, ImportZipRequest, MarkActiveFolderRequest, MarkdownRequest, MetaRequest,
+    RequestDoc, ResponseDoc, StaticCreateRequest, StaticExportRequest,
+    compute_crud_operations_inner, create_static_inner, export_bookmarks_inner,
+    export_collection_inner, export_merge_inner, export_static_inner, generate_markdown_inner,
+    generate_meta_inner, import_zip_inner, mark_active_folder_inner, write_endpoint_inner,
+    write_request_inner, write_response_inner,
     tagops_merge_inner, tagops_create_inner, tagops_bulk_add_inner,
     tagops_bulk_remove_inner, tagops_rename_inner,
 };
@@ -138,6 +139,13 @@ async fn dispatch(task: &str, payload: Value) -> (bool, Value, Option<String>) {
         "write_request" => run(payload, |p: RequestDoc| write_request_inner(p)).await,
 
         "write_response" => run(payload, |p: ResponseDoc| write_response_inner(p)).await,
+
+        "compute_crud_operations" => {
+            run(payload, |p: CrudOperationsRequest| {
+                compute_crud_operations_inner(p)
+            })
+            .await
+        }
 
         "mark_active_folder" => {
             run(payload, |p: MarkActiveFolderRequest| async move {

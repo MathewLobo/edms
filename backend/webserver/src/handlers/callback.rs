@@ -36,12 +36,13 @@ pub async fn ipc_callback(
     }
 
     match callback.task.as_str() {
-        "run_test"           => handle_run_test(&state, &callback).await,
-        "write_request"      => handle_write_request(&state, &callback).await,
-        "export_collection"  => handle_export_collection(&state, &callback).await,
-        "generate_markdown"  => handle_generate_markdown(&state, &callback).await,
-        "export_merge"       => handle_export_merge(&state, &callback).await,
-        "mark_active_folder" => handle_mark_active_folder(&state, &callback).await,
+        "run_test"                 => handle_run_test(&state, &callback).await,
+        "write_request"            => handle_write_request(&state, &callback).await,
+        "export_collection"        => handle_export_collection(&state, &callback).await,
+        "generate_markdown"        => handle_generate_markdown(&state, &callback).await,
+        "export_merge"             => handle_export_merge(&state, &callback).await,
+        "mark_active_folder"       => handle_mark_active_folder(&state, &callback).await,
+        "compute_crud_operations"  => handle_compute_crud_operations(&state, &callback).await,
         _ => {
             info!(
                 "[callback] task='{}' completed — no specific handler",
@@ -89,6 +90,32 @@ async fn handle_run_test(state: &AppState, callback: &IpcCallback) {
         }),
         3000,
     );
+
+    // Record response metadata in the DB — without this, response_metadata
+    // stays permanently empty and QP Pairs (request+response joins) in the
+    // CRUD Operations table can never show anything but zero.
+    {
+        let st = state.clone();
+        let eid = endpoint_id.clone();
+        let rf = response_file.clone();
+        let res = tokio::task::spawn_blocking(move || {
+            crate::db::insert_response_metadata(
+                &st.core,
+                &st.queries,
+                &eid,
+                request_number,
+                &rf,
+                status_code,
+                Some(response_time_ms),
+            )
+        })
+        .await;
+        match res {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => warn!("[callback] failed to insert response_metadata: {e:?}"),
+            Err(e) => warn!("[callback] failed to join insert_response_metadata task: {e}"),
+        }
+    }
 
     // Broadcast TestFinished — WS clients update immediately
     let _ = state.events_tx.send(ServerEvent::TestFinished {
@@ -160,4 +187,27 @@ async fn handle_mark_active_folder(state: &AppState, callback: &IpcCallback) {
     );
     // active_folder is already updated in AppState by handle_ws_make_active
     // before the child was even spawned — nothing more to do here
+}
+
+// ── compute_crud_operations ─────────────────────────────────────────────────────
+//
+// The child process finished scanning edms.db and grouping every entity
+// type by HTTP method. Write it into dashboard.db and broadcast so the
+// dashboard's Refresh button can flip out of its loading state.
+
+async fn handle_compute_crud_operations(state: &AppState, callback: &IpcCallback) {
+    match crate::handlers::dashboard::store_crud_operations_result(state, &callback.result) {
+        Ok(computed_at) => {
+            info!("[callback] compute_crud_operations stored, computed_at={computed_at}");
+            let _ = state
+                .events_tx
+                .send(ServerEvent::CrudOperationsUpdated { computed_at });
+        }
+        Err(e) => {
+            warn!("[callback] failed to store crud operations result: {e}");
+            let _ = state.events_tx.send(ServerEvent::Error {
+                message: format!("Failed to store CRUD operations result: {e}"),
+            });
+        }
+    }
 }
