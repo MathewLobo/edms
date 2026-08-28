@@ -18,6 +18,12 @@ use compute::api::handlers::{
     export_collection_inner, export_merge_inner, export_static_inner, generate_markdown_inner,
     generate_meta_inner, import_zip_inner, mark_active_folder_inner, write_endpoint_inner,
     write_request_inner, write_response_inner,
+    tagops_merge_inner, tagops_create_inner, tagops_bulk_add_inner,
+    tagops_bulk_remove_inner, tagops_rename_inner,
+};
+use compute::tagops::{
+    MergeRequest as TagMergeRequest, CreateFromTagsRequest,
+    BulkTagRequest, RenameTagRequest,
 };
 
 // IpcRequest/IpcCallback are defined in Tara's ipc.rs.
@@ -148,6 +154,31 @@ async fn dispatch(task: &str, payload: Value) -> (bool, Value, Option<String>) {
                     .and_then(|r| serde_json::to_string(&r).map_err(|e| e.to_string()))
             })
             .await
+        }
+
+        // ── Tag operations ──────────────────────────────────────────────────
+        // Each task receives a typed payload that includes db_path.
+        // The inner fn runs on a blocking thread and returns the Activity Log
+        // serialised as a JSON string, which becomes the IPC result value.
+
+        "tagops_merge" => {
+            run(payload, |p: TagMergeRequest| tagops_merge_inner(p)).await
+        }
+
+        "tagops_create_from_tags" => {
+            run(payload, |p: CreateFromTagsRequest| tagops_create_inner(p)).await
+        }
+
+        "tagops_bulk_add" => {
+            run(payload, |p: BulkTagRequest| tagops_bulk_add_inner(p)).await
+        }
+
+        "tagops_bulk_remove" => {
+            run(payload, |p: BulkTagRequest| tagops_bulk_remove_inner(p)).await
+        }
+
+        "tagops_rename" => {
+            run(payload, |p: RenameTagRequest| tagops_rename_inner(p)).await
         }
 
         unknown => {

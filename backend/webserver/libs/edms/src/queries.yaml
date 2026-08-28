@@ -86,8 +86,8 @@ responses:
 
 tags:
   T1:
-    help: "Insert a tag for an endpoint"
-    query: "INSERT INTO tags (endpoint_id, tag) VALUES (?, ?)"
+    help: "Insert a tag for an endpoint (idempotent)"
+    query: "INSERT OR IGNORE INTO tags (endpoint_id, tag) VALUES (?, ?)"
 
   T2:
     help: "Get all tags for an endpoint"
@@ -112,6 +112,10 @@ tags:
   T7:
     help: "Get popular tags sorted by usage count"
     query: "SELECT tag, COUNT(*) as count FROM tags GROUP BY tag ORDER BY count DESC"
+
+  T8:
+    help: "Rename a tag across all endpoints"
+    query: "UPDATE tags SET tag = ? WHERE tag = ?"
 
 history:
   H1:
@@ -162,6 +166,14 @@ bookmarks:
   B7:
     help: "Insert a bookmark without notes (for copying)"
     query: "INSERT INTO bookmarks (endpoint_id, folder, notes) VALUES (?, ?, NULL)"
+
+  B8:
+    help: "List distinct endpoints in a collection that carry any tag from a dynamic IN list (caller expands ? per tag)"
+    query: "SELECT DISTINCT b.endpoint_id FROM bookmarks b JOIN tags t ON t.endpoint_id = b.endpoint_id WHERE b.folder = ? AND t.tag IN (?)"
+
+  B9:
+    help: "Check whether an endpoint already exists in a collection (dedup guard for merge/create)"
+    query: "SELECT COUNT(*) FROM bookmarks WHERE endpoint_id = ? AND folder = ?"
 
 # Catalog tables: which collections/webviews/repoviews exist and where their
 # independent SQLite file lives (per Ravi, 2026-08-25).
