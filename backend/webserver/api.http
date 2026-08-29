@@ -1,0 +1,199 @@
+### EDMS Webserver API
+### For use with the VS Code "REST Client" extension (or IntelliJ's built-in HTTP client).
+### Generated from routes in src/main.rs on the mathew/dashboard-sqlite branch.
+###
+### Some routes below are WebSocket-only and cannot be driven from this file — they are
+### marked "WS ONLY" and left commented out. Use a WS client (e.g. websocat, browser
+### devtools) against ws://localhost:3000/<path> instead.
+
+@baseUrl = http://localhost:3000
+
+# ============================================================
+# Views
+# ============================================================
+
+### Home view metadata
+GET {{baseUrl}}/home
+
+### Test view metadata
+GET {{baseUrl}}/test-view
+
+### List view metadata
+GET {{baseUrl}}/list-view
+
+# ============================================================
+# Endpoints CRUD
+# ============================================================
+
+### Create an endpoint
+# "method" is optional — GET/POST/PUT/PATCH/DELETE only, 400 if invalid.
+# Omitting it leaves the endpoint unclassified in the CRUD Operations table.
+# Side effect: triggers a dashboard snapshot refresh (dashboard.db) on success.
+POST {{baseUrl}}/endpoints/create
+Content-Type: application/json
+
+{
+  "endpoint_id": "get-user-profile",
+  "endpoint_str": "https://api.example.com/users/{id}",
+  "annotation": "Fetches a user profile by id",
+  "method": "GET"
+}
+
+### Delete an endpoint
+# Side effect: same dashboard snapshot refresh as create, on success.
+POST {{baseUrl}}/endpoints/get-user-profile/delete
+
+# ============================================================
+# Test View
+# ============================================================
+
+### Stop the current test run
+POST {{baseUrl}}/test-view/stop
+
+### Save a test run to history
+POST {{baseUrl}}/test-view/save/history
+Content-Type: application/json
+
+{
+  "endpoint_id": "get-user-profile",
+  "action": "test",
+  "details": "manual run from api.http"
+}
+
+### Save a bookmark
+# Side effect: triggers a dashboard snapshot refresh.
+POST {{baseUrl}}/test-view/save/bookmark
+Content-Type: application/json
+
+{
+  "endpoint_id": "get-user-profile",
+  "notes": "known-good response, keep for regression checks"
+}
+
+### Clear all history
+POST {{baseUrl}}/test-view/history/clearall
+
+### Clear all bookmarks
+# Side effect: triggers a dashboard snapshot refresh.
+POST {{baseUrl}}/test-view/bookmark/clearall
+
+### WS ONLY — subscribe to live endpoint list: GET /test-view/endpoints/load
+### WS ONLY — subscribe to live bookmark list:  GET /test-view/bookmarks/load
+### WS ONLY — run a test (send {"type":"...","payload":{"endpoint_id","method","body","timeout_ms","tick_interval_ms"}}): GET /test-view/run
+### WS ONLY — add a history entry to a bookmark folder (also triggers a
+### dashboard snapshot refresh): GET /test-view/{bookmark}/add
+### WS ONLY — delete an entry from a bookmark folder (also triggers a
+### dashboard snapshot refresh): GET /test-view/{bookmark}/delete
+
+# ============================================================
+# Tags
+# ============================================================
+# add/remove (not list or popular) trigger a live dashboard snapshot refresh,
+# same as endpoint create/delete.
+
+### Add a tag to an endpoint
+POST {{baseUrl}}/tags/get-user-profile/add
+Content-Type: application/json
+
+{ "tag": "critical" }
+
+### Remove a tag from an endpoint
+POST {{baseUrl}}/tags/get-user-profile/remove
+Content-Type: application/json
+
+{ "tag": "critical" }
+
+### List tags for an endpoint
+GET {{baseUrl}}/tags/get-user-profile
+
+### Most-used tags across all endpoints
+GET {{baseUrl}}/tags/popular
+
+# ============================================================
+# Bookmarks
+# ============================================================
+
+### Snapshot the active workspace's bookmarks into a named collection
+# Side effect: triggers a dashboard snapshot refresh.
+POST {{baseUrl}}/bookmarks/my-collection/create
+
+### WS ONLY — load a bookmark collection into the active workspace
+### (also triggers a dashboard snapshot refresh): GET /bookmarks/{collection}/load
+
+# ============================================================
+# Data View
+# ============================================================
+
+### Delete a data folder
+POST {{baseUrl}}/dataview/my-folder/delete
+
+### Merge a data folder (fire-and-forget — returns 202 immediately,
+### result arrives later via POST /internal/callback -> ExportReady event)
+POST {{baseUrl}}/dataview/my-folder/merge
+
+### WS ONLY — mark a folder active (syncs to disk, broadcasts FolderBecameActive): GET /dataview/{folder}/active
+
+### Live active-folder dashboard counts (endpoints / bookmarks / history)
+# NOTE: this is NOT the dashboard_snapshots table from dashboard_db.rs —
+# it's a separate, older live-count endpoint scoped to the active folder.
+# See the "Dashboard Snapshot" section below for the snapshot data.
+GET {{baseUrl}}/dataview/dashboard
+
+# ============================================================
+# Dashboard Snapshot
+# ============================================================
+
+### Latest dashboard snapshot (endpoint/bookmark/tag counts, DB size,
+### storage size, file count) — taken on startup, and refreshed live after
+### any endpoint create/delete, tag add/remove, or bookmark/collection
+### action (see side-effect notes on those routes above).
+GET {{baseUrl}}/dashboard/snapshot
+
+### Full snapshot history, oldest first (rolling 30-day retention window)
+GET {{baseUrl}}/dashboard/snapshot/history
+
+### Static data — hardcoded config loaded from config.yaml at startup:
+### application limits, stability/commit info, external links.
+GET {{baseUrl}}/dashboard/static
+
+### Day-over-day comparison between two arbitrary dates (not necessarily
+### adjacent — e.g. day 1 vs day 6). Dates are "YYYY-MM-DD". 404 if either
+### date has no daily snapshot — response distinguishes "outside the 30-day
+### retention window" from "no data yet" (today/future/app was down that day).
+### Daily snapshots are captured automatically once per calendar-date
+### rollover (a background watcher, not a request you trigger).
+GET {{baseUrl}}/dashboard/compare?from=2026-08-01&to=2026-08-07
+
+### CRUD Operations breakdown (endpoint segments/tags/bookmarks/history/QP
+### pairs, grouped by HTTP method with count + % of that row's total).
+### Ravi's [1] approach: global processing via a compute child process,
+### triggered by app launch + this refresh route — never per-transaction.
+### 404 until the first refresh (startup or manual) completes.
+GET {{baseUrl}}/dashboard/crud-operations
+
+### Trigger a CRUD Operations recompute — this is what the dashboard's
+### Refresh button hits. Fire-and-forget: 202 immediately, result lands a
+### moment later via POST /internal/callback.
+POST {{baseUrl}}/dashboard/crud-operations/refresh
+
+# ============================================================
+# Logs
+# ============================================================
+
+### Plain-text tail of the app log (last 500 lines, oldest first)
+GET {{baseUrl}}/logs
+
+# ============================================================
+# Repo Export
+# ============================================================
+
+### Export a bookmark collection
+# Returns markdown immediately; also fires async zip export + markdown
+# generation jobs in the background (results via /internal/callback).
+GET {{baseUrl}}/repo/my-collection/export.zip/export
+
+# ============================================================
+# Internal (do not call from the UI — edms-child callback channel only)
+# ============================================================
+
+# POST {{baseUrl}}/internal/callback

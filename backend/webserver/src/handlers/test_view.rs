@@ -108,6 +108,7 @@ pub async fn save_bookmark(
             .unwrap_or(Ok(0))
             .unwrap_or(0);
 
+            state.refresh_dashboard_snapshot();
             state.emit(ServerEvent::BookmarksUpdated { count }).await;
             (StatusCode::OK, Json(json!({ "ok": true, "bookmark_count": count })))
         }
@@ -174,6 +175,7 @@ pub async fn clear_bookmarks(State(state): State<AppState>) -> (StatusCode, Json
 
     match res {
         Ok(Ok(_)) => {
+            state.refresh_dashboard_snapshot();
             state.emit(ServerEvent::BookmarksUpdated { count: 0 }).await;
             (StatusCode::OK, Json(json!({ "ok": true })))
         }
@@ -440,6 +442,7 @@ async fn handle_ws_add_from_history(mut socket: WebSocket, state: AppState, _boo
                 .unwrap_or(Ok(0))
                 .unwrap_or(0);
 
+                state.refresh_dashboard_snapshot();
                 state.emit(ServerEvent::BookmarksUpdated { count }).await;
                 let resp = json!({ "type": "ok", "bookmark_count": count });
                 let _ = socket.send(Message::Text(resp.to_string())).await;
@@ -481,6 +484,7 @@ async fn handle_ws_delete_from_bookmark(mut socket: WebSocket, state: AppState, 
                 .unwrap_or(Ok(0))
                 .unwrap_or(0);
 
+                state.refresh_dashboard_snapshot();
                 state.emit(ServerEvent::BookmarksUpdated { count }).await;
                 let resp = json!({ "type": "ok", "bookmark_count": count });
                 let _ = socket.send(Message::Text(resp.to_string())).await;

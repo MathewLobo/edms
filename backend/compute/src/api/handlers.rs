@@ -334,6 +334,101 @@ pub async fn mark_active_folder_handler(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
+// ── CRUD OPERATIONS (dashboard) ────────────────────────────────────────────────
+//
+// Ravi's [1] approach: global, one-time processing spun up via a child
+// process, triggered by app launch or the dashboard's Refresh button — not
+// a per-transaction update. Scans a single edms.db for now; extending to
+// multiple per-folder sqlite files (once that data model exists) just means
+// looping this same logic over more db_paths and summing the counts.
+
+#[derive(Deserialize)]
+pub struct CrudOperationsRequest {
+    pub db_path: String,
+}
+
+#[derive(Serialize)]
+pub struct CrudOperationsRowOut {
+    pub entity_type: String,
+    pub method: String,
+    pub count: i64,
+}
+
+#[derive(Serialize)]
+pub struct CrudOperationsResult {
+    pub rows: Vec<CrudOperationsRowOut>,
+}
+
+const CRUD_QUERIES: &[(&str, &str)] = &[
+    (
+        "endpoint_segments",
+        "SELECT COALESCE(method, 'UNCLASSIFIED') AS m, COUNT(*) AS c \
+         FROM endpoints GROUP BY m",
+    ),
+    (
+        "tags",
+        "SELECT COALESCE(e.method, 'UNCLASSIFIED') AS m, COUNT(*) AS c \
+         FROM tags t JOIN endpoints e ON t.endpoint_id = e.endpoint_id GROUP BY m",
+    ),
+    (
+        "bookmarks",
+        "SELECT COALESCE(e.method, 'UNCLASSIFIED') AS m, COUNT(*) AS c \
+         FROM bookmarks b JOIN endpoints e ON b.endpoint_id = e.endpoint_id GROUP BY m",
+    ),
+    (
+        "history",
+        "SELECT COALESCE(e.method, 'UNCLASSIFIED') AS m, COUNT(*) AS c \
+         FROM history h JOIN endpoints e ON h.endpoint_id = e.endpoint_id GROUP BY m",
+    ),
+    (
+        "qp_pairs",
+        "SELECT COALESCE(e.method, 'UNCLASSIFIED') AS m, COUNT(*) AS c \
+         FROM request_metadata rm \
+         JOIN response_metadata resp \
+           ON rm.endpoint_id = resp.endpoint_id AND rm.request_number = resp.request_number \
+         JOIN endpoints e ON rm.endpoint_id = e.endpoint_id \
+         GROUP BY m",
+    ),
+];
+
+fn compute_crud_operations_sync(db_path: &str) -> Result<CrudOperationsResult, String> {
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let mut rows = Vec::new();
+
+    for (entity_type, query) in CRUD_QUERIES {
+        let mut stmt = conn.prepare(query).map_err(|e| e.to_string())?;
+        let mapped = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+
+        for entry in mapped {
+            let (method, count) = entry.map_err(|e| e.to_string())?;
+            rows.push(CrudOperationsRowOut {
+                entity_type: entity_type.to_string(),
+                method,
+                count,
+            });
+        }
+    }
+
+    Ok(CrudOperationsResult { rows })
+}
+
+pub async fn compute_crud_operations_inner(payload: CrudOperationsRequest) -> Result<String, String> {
+    let result = tokio::task::spawn_blocking(move || compute_crud_operations_sync(&payload.db_path))
+        .await
+        .map_err(|e| e.to_string())??;
+    serde_json::to_string(&result).map_err(|e| e.to_string())
+}
+
+pub async fn compute_crud_operations(
+    Json(payload): Json<CrudOperationsRequest>,
+) -> Result<String, String> {
+    compute_crud_operations_inner(payload).await
+}
+
 // ── SYSTEM STATUS / INIT ──────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -372,4 +467,61 @@ pub async fn system_init(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(report))
+}
+
+// Tag operation handlers — each runs the synchronous tagops fn on spawn_blocking.
+
+use crate::tagops::{
+    ActivityEntry, BulkTagRequest, CreateFromTagsRequest, MergeRequest, RenameTagRequest,
+    bulk_add_tags, bulk_remove_tags, create_from_tags, merge_by_tags, rename_tag,
+};
+
+pub async fn tagops_merge_inner(req: MergeRequest) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut log: Vec<ActivityEntry> = Vec::new();
+        merge_by_tags(req, &mut log).map_err(|e| e.to_string())?;
+        serde_json::to_string(&log).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn tagops_create_inner(req: CreateFromTagsRequest) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut log: Vec<ActivityEntry> = Vec::new();
+        create_from_tags(req, &mut log).map_err(|e| e.to_string())?;
+        serde_json::to_string(&log).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn tagops_bulk_add_inner(req: BulkTagRequest) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut log: Vec<ActivityEntry> = Vec::new();
+        bulk_add_tags(req, &mut log).map_err(|e| e.to_string())?;
+        serde_json::to_string(&log).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn tagops_bulk_remove_inner(req: BulkTagRequest) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut log: Vec<ActivityEntry> = Vec::new();
+        bulk_remove_tags(req, &mut log).map_err(|e| e.to_string())?;
+        serde_json::to_string(&log).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn tagops_rename_inner(req: RenameTagRequest) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut log: Vec<ActivityEntry> = Vec::new();
+        rename_tag(req, &mut log).map_err(|e| e.to_string())?;
+        serde_json::to_string(&log).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

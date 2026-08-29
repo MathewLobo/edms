@@ -223,6 +223,7 @@ dependencies = [
  "anyhow",
  "axum",
  "chrono",
+ "edms",
  "futures-util",
  "portpicker",
  "reqwest",
@@ -346,6 +347,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "edms"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1051,6 +1064,7 @@ version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95b4103cffefa72eb8428cb6b47d6627161e51c2739fc5e3b734584157bc642a"
 dependencies = [
+ "cc",
  "pkg-config",
  "vcpkg",
 ]
