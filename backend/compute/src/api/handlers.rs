@@ -544,3 +544,60 @@ pub async fn system_init(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(report))
 }
+
+// Tag operation handlers — each runs the synchronous tagops fn on spawn_blocking.
+
+use crate::tagops::{
+    ActivityEntry, BulkTagRequest, CreateFromTagsRequest, MergeRequest, RenameTagRequest,
+    bulk_add_tags, bulk_remove_tags, create_from_tags, merge_by_tags, rename_tag,
+};
+
+pub async fn tagops_merge_inner(req: MergeRequest) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut log: Vec<ActivityEntry> = Vec::new();
+        merge_by_tags(req, &mut log).map_err(|e| e.to_string())?;
+        serde_json::to_string(&log).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn tagops_create_inner(req: CreateFromTagsRequest) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut log: Vec<ActivityEntry> = Vec::new();
+        create_from_tags(req, &mut log).map_err(|e| e.to_string())?;
+        serde_json::to_string(&log).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn tagops_bulk_add_inner(req: BulkTagRequest) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut log: Vec<ActivityEntry> = Vec::new();
+        bulk_add_tags(req, &mut log).map_err(|e| e.to_string())?;
+        serde_json::to_string(&log).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn tagops_bulk_remove_inner(req: BulkTagRequest) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut log: Vec<ActivityEntry> = Vec::new();
+        bulk_remove_tags(req, &mut log).map_err(|e| e.to_string())?;
+        serde_json::to_string(&log).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn tagops_rename_inner(req: RenameTagRequest) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut log: Vec<ActivityEntry> = Vec::new();
+        rename_tag(req, &mut log).map_err(|e| e.to_string())?;
+        serde_json::to_string(&log).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
