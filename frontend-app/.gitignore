@@ -1,0 +1,10 @@
+node_modules/
+src/styles/output.css
+dist/
+
+# Logs
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
