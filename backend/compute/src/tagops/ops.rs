@@ -1,25 +1,13 @@
 use crate::tagops::{
     db::{DynResult, endpoints_with_tags_in_collection, insert_if_absent, log_entry, open_core},
+    merge::merge_by_tags_coordinator,
     types::*,
 };
 
 /// Merge endpoints — filtered by tag sets — from several source collections into
 /// a new bookmark collection. Queries: B3/B8 (filter), B9/B7 (dedup + insert).
 pub fn merge_by_tags(req: MergeRequest, log: &mut Vec<ActivityEntry>) -> DynResult<()> {
-    log_entry(log, format!("Starting merge into '{}'", req.target_collection_name));
-    let (core, queries) = open_core(&req.db_path)?;
-
-    for src in &req.sources {
-        log_entry(log, format!("  Processing '{}' ({} tag filter(s))", src.collection_id, src.tags.len()));
-        let eids = endpoints_with_tags_in_collection(&core, &queries, &src.collection_id, &src.tags)?;
-        for eid in &eids {
-            insert_if_absent(&core, &queries, eid, &req.target_collection_name)?;
-        }
-        log_entry(log, format!("    → {} endpoint(s) copied", eids.len()));
-    }
-
-    log_entry(log, format!("Merge into '{}' complete.", req.target_collection_name));
-    Ok(())
+    merge_by_tags_coordinator(&req.db_path, &req.target_collection_name, &req.sources, log)
 }
 
 /// Create a new collection from endpoints in one source collection filtered by tags.
