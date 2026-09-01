@@ -13,11 +13,11 @@ use std::time::Instant;
 use compute::api::handlers::{
     BookmarkRequest, CrudOperationsRequest, EndpointWriteRequest, ExportCollectionRequest,
     ExportMergeRequest, ImportZipRequest, MarkActiveFolderRequest, MarkdownRequest, MetaRequest,
-    RequestDoc, ResponseDoc, StaticCreateRequest, StaticExportRequest,
+    RequestDoc, ResponseDoc, RunTestRequest, StaticCreateRequest, StaticExportRequest,
     compute_crud_operations_inner, create_static_inner, export_bookmarks_inner,
     export_collection_inner, export_merge_inner, export_static_inner, generate_markdown_inner,
-    generate_meta_inner, import_zip_inner, mark_active_folder_inner, write_endpoint_inner,
-    write_request_inner, write_response_inner,
+    generate_meta_inner, import_zip_inner, mark_active_folder_inner, run_test_inner,
+    write_endpoint_inner, write_request_inner, write_response_inner,
     tagops_merge_inner, tagops_create_inner, tagops_bulk_add_inner,
     tagops_bulk_remove_inner, tagops_rename_inner,
 };
@@ -155,6 +155,8 @@ async fn dispatch(task: &str, payload: Value) -> (bool, Value, Option<String>) {
             })
             .await
         }
+
+        "run_test" => run(payload, |p: RunTestRequest| run_test_inner(p)).await,
 
         // ── Tag operations ──────────────────────────────────────────────────
         // Each task receives a typed payload that includes db_path.

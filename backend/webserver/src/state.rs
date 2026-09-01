@@ -1,8 +1,10 @@
 use crate::config::AppConfig;
 use crate::events::ServerEvent;
+use crate::timer::TimerHandle;
 use edms::core::EdmsCore;
 use edms::query_loader::QueryMap;
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, RwLock};
@@ -18,6 +20,12 @@ pub struct AppState {
     pub storage_root: PathBuf,
     pub started_at: String,
     pub config: Arc<AppConfig>,
+    /// Timer handles for in-flight test runs, keyed by (endpoint_id,
+    /// request_number) — so whichever code path learns the test's real
+    /// outcome (success or timeout, in callback.rs) can cancel the app's
+    /// own independent countdown instead of letting it keep ticking or
+    /// fire a second, uncoordinated TestTimeout on its own schedule.
+    pub active_timers: Arc<Mutex<HashMap<(String, i32), TimerHandle>>>,
 }
 
 impl AppState {
@@ -40,6 +48,21 @@ impl AppState {
             storage_root,
             started_at: chrono::Utc::now().to_rfc3339(),
             config,
+            active_timers: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Removes and cancels the timer for (endpoint_id, request_number), if
+    /// one is still running. Call this once the test's real outcome is
+    /// known — a no-op if the timer already fired and removed itself.
+    pub fn cancel_timer(&self, endpoint_id: &str, request_number: i32) {
+        let handle = self
+            .active_timers
+            .lock()
+            .unwrap()
+            .remove(&(endpoint_id.to_string(), request_number));
+        if let Some(handle) = handle {
+            handle.cancel();
         }
     }
 

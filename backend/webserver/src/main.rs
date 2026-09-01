@@ -34,9 +34,9 @@ use handlers::{
     repo::export_collection,
     tags::{add_tag, list_tags_for_endpoint, popular_tags, remove_tag},
     test_view::{
-        clear_bookmarks, clear_history, save_bookmark, save_history, stop,
-        ws_add_from_history_to_bookmark, ws_delete_from_bookmark, ws_load_bookmarks,
-        ws_load_endpoints, ws_run,
+        clear_bookmarks, clear_history, get_saved_request, get_saved_response, save_bookmark,
+        save_history, stop, ws_add_from_history_to_bookmark, ws_delete_from_bookmark,
+        ws_load_bookmarks, ws_load_endpoints, ws_run,
     },
     view::{home, list_view, test_view},
     view_catalog::{
@@ -145,6 +145,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/test-view/save/bookmark", post(save_bookmark))
         .route("/test-view/:bookmark/add", get(ws_add_from_history_to_bookmark))
         .route("/test-view/:bookmark/delete", get(ws_delete_from_bookmark))
+        .route("/test-view/:endpoint_id/request/:request_number", get(get_saved_request))
+        .route("/test-view/:endpoint_id/response/:request_number", get(get_saved_response))
         .route("/test-view/history/clearall", post(clear_history))
         .route("/test-view/bookmark/clearall", post(clear_bookmarks))
         .route("/bookmarks/:collection/create", post(create_collection))

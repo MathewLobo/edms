@@ -302,7 +302,10 @@ async fn run_test_impl(
 
     // 3) Insert request metadata into DB
     let method_upper = method.to_uppercase();
-    let request_file = format!("edms_data/{}/request-{:03}.json", endpoint_id, request_number);
+    // Must match the {eid}-request-{N}.json filename write_request_file
+    // actually produces (compute::endpoint_writer) — these two were out of
+    // sync before, meaning the file this points at didn't exist.
+    let request_file = format!("edms_data/{}/{}-request-{}.json", endpoint_id, endpoint_id, request_number);
 
     tokio::task::spawn_blocking({
         let st = state.clone();
@@ -334,13 +337,20 @@ async fn run_test_impl(
         request_number,
     });
 
-    // 6) Start timer
-    let _timer_handle = timer::spawn_timer(
+    // 6) Start timer — keep the handle so callback.rs can cancel it once
+    //    the real outcome (success or timeout) is known, instead of letting
+    //    it tick on its own independent schedule.
+    let timer_handle = timer::spawn_timer(
         endpoint_id.to_string(),
         request_number,
         timer_cfg.clone(),
         state.events_tx.clone(),
     );
+    state
+        .active_timers
+        .lock()
+        .unwrap()
+        .insert((endpoint_id.to_string(), request_number), timer_handle);
 
     // 7) Spawn edms-child for the actual HTTP test call
     //    This is the original run_test task — unchanged
@@ -495,4 +505,60 @@ async fn handle_ws_delete_from_bookmark(mut socket: WebSocket, state: AppState, 
             }
         }
     }
+}
+
+// ── Fetch a saved request/response body ─────────────────────────────────
+//
+// TestFinished only carries status_code/response_time_ms/response_file — a
+// server-side path, not the actual content. These routes are the missing
+// second half of the WS-trigger-then-REST-fetch pattern: the client uses
+// endpoint_id + request_number (already known from TestFinished) to pull
+// the real body. Deliberately NOT taking a raw path from the client —
+// that would be a path-traversal risk. The server builds the path itself,
+// the same way test_view.rs/callback.rs already do when writing it.
+
+fn safe_id(id: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if id.is_empty() || id.contains("..") || id.contains('/') || id.contains('\\') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": "invalid endpoint_id" })),
+        ));
+    }
+    Ok(())
+}
+
+async fn read_saved_file(
+    endpoint_id: &str,
+    request_number: i64,
+    kind: &str,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if let Err(e) = safe_id(endpoint_id) {
+        return e;
+    }
+    let path = format!("edms_data/{endpoint_id}/{endpoint_id}-{kind}-{request_number}.json");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(content) => {
+            let body: serde_json::Value =
+                serde_json::from_str(&content).unwrap_or(serde_json::Value::String(content));
+            (StatusCode::OK, Json(json!({ "ok": true, "body": body })))
+        }
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "error": format!("no saved {kind} for {endpoint_id}#{request_number}: {e}") })),
+        ),
+    }
+}
+
+/// GET /test-view/{endpoint_id}/request/{request_number}
+pub async fn get_saved_request(
+    Path((endpoint_id, request_number)): Path<(String, i64)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    read_saved_file(&endpoint_id, request_number, "request").await
+}
+
+/// GET /test-view/{endpoint_id}/response/{request_number}
+pub async fn get_saved_response(
+    Path((endpoint_id, request_number)): Path<(String, i64)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    read_saved_file(&endpoint_id, request_number, "response").await
 }

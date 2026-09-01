@@ -446,6 +446,82 @@ pub async fn system_status(
     Ok(Json(report))
 }
 
+// ── RUN TEST ───────────────────────────────────────────────────────────────────
+// Ported from the dead webserver/src/bin/child.rs, which was never actually
+// spawned (ipc.rs only ever spawns edms-child, this binary). Output shape
+// adapted to match what webserver/src/handlers/callback.rs::handle_run_test
+// actually reads today (response_body, not the old response_file) — the two
+// had drifted apart while this sat unused.
+
+#[derive(Deserialize)]
+pub struct RunTestRequest {
+    pub endpoint_id: String,
+    pub url: String,
+    #[serde(default = "default_method")]
+    pub method: String,
+    #[serde(default)]
+    pub body: serde_json::Value,
+    pub request_number: i64,
+    #[serde(default = "default_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+fn default_method() -> String {
+    "GET".to_string()
+}
+
+fn default_timeout_ms() -> u64 {
+    30_000
+}
+
+pub async fn run_test_inner(payload: RunTestRequest) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(payload.timeout_ms))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+
+    let method = payload.method.to_uppercase();
+    let req = match method.as_str() {
+        "POST" => client.post(&payload.url).json(&payload.body),
+        "PUT" => client.put(&payload.url).json(&payload.body),
+        "DELETE" => client.delete(&payload.url),
+        "PATCH" => client.patch(&payload.url).json(&payload.body),
+        "HEAD" => client.head(&payload.url),
+        _ => client.get(&payload.url),
+    };
+
+    let start = std::time::Instant::now();
+
+    match req.send().await {
+        Ok(resp) => {
+            let elapsed_ms = start.elapsed().as_millis() as i64;
+            let status_code = resp.status().as_u16() as i64;
+            let text = resp.text().await.unwrap_or_default();
+            // Best-effort parse as JSON; fall back to the raw text as a
+            // string value if the endpoint didn't return JSON.
+            let response_body: serde_json::Value =
+                serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text));
+
+            Ok(serde_json::json!({
+                "endpoint_id": payload.endpoint_id,
+                "request_number": payload.request_number,
+                "status_code": status_code,
+                "response_time_ms": elapsed_ms,
+                "response_body": response_body,
+                "timed_out": false,
+            })
+            .to_string())
+        }
+        Err(e) if e.is_timeout() => Ok(serde_json::json!({
+            "endpoint_id": payload.endpoint_id,
+            "request_number": payload.request_number,
+            "timed_out": true,
+        })
+        .to_string()),
+        Err(e) => Err(format!("HTTP request failed: {e}")),
+    }
+}
+
 pub async fn system_init(
     payload: Option<Json<SystemInitRequest>>,
 ) -> Result<Json<folder_manager::SystemInitReport>, (StatusCode, String)> {
