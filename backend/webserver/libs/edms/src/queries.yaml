@@ -236,3 +236,32 @@ view_tag_counts:
   REPOVIEW_LIST_TAGS:
     help: "List all repoview tags with their counts"
     query: "SELECT tagname, count FROM repoview_tags ORDER BY tagname"
+
+merge:
+  M_CLASSIFY:
+    help: "Classify source endpoints against target collection (requires dynamic IN clause at the end)"
+    query: "SELECT src.endpoint_id, src.endpoint_str, COALESCE(src.method,'') AS method, src.annotation, target.endpoint_id AS target_eid FROM endpoints src LEFT JOIN (SELECT e.endpoint_id, e.endpoint_str, COALESCE(e.method,'') AS method FROM endpoints e JOIN bookmarks b ON b.endpoint_id = e.endpoint_id WHERE b.folder = ? GROUP BY e.endpoint_str, COALESCE(e.method,'')) target ON target.endpoint_str = src.endpoint_str AND target.method = COALESCE(src.method,'') WHERE src.endpoint_id IN "
+  M_UNION_TAGS:
+    help: "Union tags from source endpoint to target endpoint"
+    query: "INSERT OR IGNORE INTO tags (endpoint_id, tag) SELECT ?, tag FROM tags WHERE endpoint_id = ?"
+  M_INSERT_EP:
+    help: "Insert net-new endpoint"
+    query: "INSERT INTO endpoints (endpoint_id, endpoint_str, annotation, method) VALUES (?, ?, ?, ?)"
+  M_INSERT_BM:
+    help: "Idempotent bookmark insert"
+    query: "INSERT OR IGNORE INTO bookmarks (endpoint_id, folder, notes) VALUES (?, ?, NULL)"
+  CT_INSERT:
+    help: "Insert collection-level tag"
+    query: "INSERT OR IGNORE INTO collection_tag_memberships (collection_name, tagname) VALUES (?, ?)"
+  CT_DELETE:
+    help: "Delete collection-level tag"
+    query: "DELETE FROM collection_tag_memberships WHERE collection_name = ? AND tagname = ?"
+  CT_LIST:
+    help: "List tags for a collection"
+    query: "SELECT tagname FROM collection_tag_memberships WHERE collection_name = ? ORDER BY tagname"
+  CT_COLLECTIONS_BY_TAG:
+    help: "List collections having a specific tag"
+    query: "SELECT collection_name FROM collection_tag_memberships WHERE tagname = ? ORDER BY collection_name"
+  CT_MERGE:
+    help: "Merge collection tags from source to target"
+    query: "INSERT OR IGNORE INTO collection_tag_memberships (collection_name, tagname) SELECT ?, tagname FROM collection_tag_memberships WHERE collection_name = ?"

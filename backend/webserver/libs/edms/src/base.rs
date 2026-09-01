@@ -27,7 +27,13 @@ impl EdmsBase {
         }
 
         let conn = Connection::open(&self.db_path)?;
-        conn.execute("PRAGMA foreign_keys = OFF", [])?;
+        // Use execute_batch so PRAGMAs that return result rows (e.g. journal_mode)
+        // do not trigger ExecuteReturnedResults errors from conn.execute().
+        conn.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             PRAGMA journal_mode = WAL;
+             PRAGMA busy_timeout = 5000;"
+        )?;
         *conn_guard = Some(conn);
 
         println!("[NOTIFICATION] Connected: {}", self.db_path);

@@ -17,6 +17,7 @@ pub struct QueryMap {
     pub bookmarks: HashMap<String, QueryConfig>,
     pub catalog: HashMap<String, QueryConfig>,
     pub view_tag_counts: HashMap<String, QueryConfig>,
+    pub merge: HashMap<String, QueryConfig>,
 }
 
 impl QueryMap {
@@ -56,5 +57,9 @@ impl QueryMap {
 
     pub fn get_view_tag_count_query(&self, key: &str) -> Option<&str> {
         self.view_tag_counts.get(key).map(|c| c.query.as_str())
+    }
+
+    pub fn get_merge_query(&self, key: &str) -> Option<&str> {
+        self.merge.get(key).map(|c| c.query.as_str())
     }
 }
