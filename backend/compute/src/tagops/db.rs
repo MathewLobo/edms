@@ -37,20 +37,16 @@ pub(super) fn endpoints_with_tags_in_collection(
     Ok(core.cproc(&sql, params.as_slice(), |row| row.get(0))?)
 }
 
-/// Insert endpoint into folder only if it is not already there (B9 check → B7 insert).
+/// Insert endpoint into folder idempotently using M_INSERT_BM.
 pub(super) fn insert_if_absent(
     core:        &EdmsCore,
     queries:     &QueryMap,
     endpoint_id: &str,
     folder:      &str,
 ) -> DynResult<()> {
-    let b9 = queries.get_bookmark_query("B9").ok_or("missing query B9")?;
-    let counts: Vec<i64> = core.cproc(b9, &[&endpoint_id, &folder], |row| row.get(0))?;
-    if counts.first().copied().unwrap_or(0) > 0 {
-        return Ok(());
-    }
-    let b7 = queries.get_bookmark_query("B7").ok_or("missing query B7")?;
-    core.proc(b7, &[&endpoint_id, &folder])?;
+    // Rely on INSERT OR IGNORE (M_INSERT_BM) instead of check-then-insert.
+    let q = queries.get_merge_query("M_INSERT_BM").ok_or("missing M_INSERT_BM")?;
+    core.proc(q, &[&endpoint_id, &folder])?;
     Ok(())
 }
 
