@@ -40,10 +40,39 @@ pub async fn ws_run(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl
     })
 }
 
-pub async fn stop() -> (StatusCode, Json<serde_json::Value>) {
+#[derive(Debug, Deserialize)]
+pub struct StopRequest {
+    pub endpoint_id: String,
+    pub request_number: i32,
+}
+
+/// POST /test-view/stop
+///
+/// Cancels the app's own countdown timer for this test — the UI stops
+/// getting TimerTick/expects-a-result state for it, and a TimerCancelled
+/// event fires (same path the timer's own natural completion uses).
+///
+/// Honest limitation: this does NOT kill the actual in-flight HTTP call.
+/// That's already running in a separate, detached edms-child process by
+/// the time this is called, and nothing tracks a handle to it — so a slow
+/// or hanging request keeps running in the background regardless. This
+/// only stops the app from waiting on / reporting about it.
+pub async fn stop(
+    State(state): State<AppState>,
+    Json(payload): Json<StopRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let cancelled = state.cancel_timer(&payload.endpoint_id, payload.request_number);
     (
         StatusCode::OK,
-        Json(json!({ "ok": true, "message": "stop requested" })),
+        Json(json!({
+            "ok": true,
+            "timer_cancelled": cancelled,
+            "message": if cancelled {
+                "Timer stopped. Note: the underlying HTTP call may still complete in the background."
+            } else {
+                "No running timer found for that endpoint/request — it may have already finished."
+            }
+        })),
     )
 }
 
