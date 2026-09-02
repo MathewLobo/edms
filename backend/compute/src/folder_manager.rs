@@ -29,19 +29,51 @@ impl FolderLayout {
         Ok(())
     }
 
-    pub fn verify_edmsfolders(&self) -> FolderStatus {
-        let required = vec![
-            "repo",
-            "session-backup",
-            "active",
-            "exports",
-            "temp",
-            "docs",
-        ];
+    /// Folders per the current (soon-to-be-retired) layout — kept required
+    /// since existing code (session-backup/active flow, exports, etc.)
+    /// still reads/writes these directly. Not removed until that code
+    /// actually migrates off them.
+    fn legacy_folders() -> Vec<&'static str> {
+        vec!["repo", "session-backup", "active", "exports", "temp", "docs"]
+    }
 
+    /// Folders per the Sept 1, 2026 storage schema (Ravi) — additive
+    /// alongside the legacy ones, not a replacement yet.
+    fn new_schema_folders() -> Vec<&'static str> {
+        vec![
+            "account-data",
+            "storage",
+            "storage/history",
+            "storage/endpoints",
+            "storage/collections",
+            "storage/repoview",
+            "storage/webview",
+            "storage/takeout",
+            "storage/imports/uncompressed/repo",
+            "storage/imports/uncompressed/collections",
+            "storage/imports/uncompressed/webview",
+            "storage/imports/compressed/repo",
+            "storage/imports/compressed/collections",
+            "storage/imports/compressed/webview",
+            "storage/exports/uncompressed/repo",
+            "storage/exports/uncompressed/collections",
+            "storage/exports/uncompressed/webview",
+            "storage/exports/compressed/repo",
+            "storage/exports/compressed/collections",
+            "storage/exports/compressed/webview",
+        ]
+    }
+
+    fn all_required_folders() -> Vec<&'static str> {
+        let mut all = Self::legacy_folders();
+        all.extend(Self::new_schema_folders());
+        all
+    }
+
+    pub fn verify_edmsfolders(&self) -> FolderStatus {
         let mut missing = Vec::new();
 
-        for folder in required {
+        for folder in Self::all_required_folders() {
             let path = self.root.join(folder);
             if !path.exists() {
                 missing.push(folder.to_string());
@@ -56,12 +88,9 @@ impl FolderLayout {
     }
 
     pub fn create_edmsfolders(&self) -> Result<(), Box<dyn std::error::Error>> {
-        fs::create_dir_all(self.root.join("repo"))?;
-        fs::create_dir_all(self.root.join("session-backup"))?;
-        fs::create_dir_all(self.root.join("active"))?;
-        fs::create_dir_all(self.root.join("exports"))?;
-        fs::create_dir_all(self.root.join("temp"))?;
-        fs::create_dir_all(self.root.join("docs"))?;
+        for folder in Self::all_required_folders() {
+            fs::create_dir_all(self.root.join(folder))?;
+        }
         Ok(())
     }
 
