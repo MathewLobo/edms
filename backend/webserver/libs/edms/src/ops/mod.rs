@@ -3,3 +3,4 @@ pub mod request_ops;
 pub mod response_ops;
 pub mod tag_ops;
 pub mod view_ops;
+pub mod collection_tag_ops;

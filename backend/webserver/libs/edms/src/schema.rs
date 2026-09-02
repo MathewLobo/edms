@@ -46,6 +46,11 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
     )?;
 
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_endpoints_str_method ON endpoints(endpoint_str, method)",
+        [],
+    )?;
+
+    conn.execute(
         "CREATE TABLE IF NOT EXISTS request_metadata (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             endpoint_id TEXT NOT NULL,
@@ -137,10 +142,46 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
             endpoint_id TEXT NOT NULL,
             folder TEXT,
             notes TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(endpoint_id, folder)
         )",
         [],
     )?;
+
+    let has_unique: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_index_list('bookmarks') WHERE origin = 'u'",
+        [], |r| r.get(0)
+    )?;
+    
+    if has_unique == 0 {
+        // Dedup: prefer row with non-null notes, then most recent (MAX id)
+        conn.execute("
+            DELETE FROM bookmarks
+            WHERE id NOT IN (
+                SELECT CASE
+                    WHEN MAX(CASE WHEN notes IS NOT NULL THEN id ELSE 0 END) > 0
+                         THEN MAX(CASE WHEN notes IS NOT NULL THEN id ELSE NULL END)
+                    ELSE MAX(id)
+                END
+                FROM bookmarks GROUP BY endpoint_id, folder
+            )", []
+        )?;
+
+        // Recreate with constraint
+        conn.execute("
+            CREATE TABLE bookmarks_new (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint_id TEXT NOT NULL,
+                folder      TEXT,
+                notes       TEXT,
+                timestamp   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(endpoint_id, folder)
+            )", []
+        )?;
+        conn.execute("INSERT INTO bookmarks_new SELECT * FROM bookmarks", [])?;
+        conn.execute("DROP TABLE bookmarks", [])?;
+        conn.execute("ALTER TABLE bookmarks_new RENAME TO bookmarks", [])?;
+    }
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_bookmarks_endpoint ON bookmarks(endpoint_id)",
@@ -212,6 +253,17 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+
+    // Per-collection tag memberships (C(T)) for merge operations
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS collection_tag_memberships (
+            collection_name TEXT NOT NULL,
+            tagname TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (collection_name, tagname)
+        )",
+        [],
+    )?;
 
     Ok(())
 }

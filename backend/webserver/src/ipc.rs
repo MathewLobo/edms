@@ -62,11 +62,14 @@ pub fn spawn_child(task: &str, payload: serde_json::Value, callback_port: u16) {
         task, callback_port
     );
 
-    // Try the release binary first, fall back to debug
     let child_bin = if std::path::Path::new("./target/release/edms-child").exists() {
         "./target/release/edms-child"
-    } else {
+    } else if std::path::Path::new("./target/debug/edms-child").exists() {
         "./target/debug/edms-child"
+    } else if std::path::Path::new("../compute/target/release/edms-child").exists() {
+        "../compute/target/release/edms-child"
+    } else {
+        "../compute/target/debug/edms-child"
     };
 
     let spawn_result = Command::new(child_bin)

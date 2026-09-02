@@ -48,6 +48,9 @@ use handlers::{
         delete_repoview_tags, delete_webview_tags, list_collections_tags, list_repoview_tags,
         list_webview_tags, rename_collections_tag, rename_repoview_tag, rename_webview_tag,
     },
+    collection_tag_memberships::{
+        add_collection_tag, collections_by_tag, list_collection_tags, remove_collection_tag,
+    },
 };
 
 #[tokio::main]
@@ -183,6 +186,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/tags/:endpoint_id", get(list_tags_for_endpoint))
         .route("/tags/:endpoint_id/add", post(add_tag))
         .route("/tags/:endpoint_id/remove", post(remove_tag))
+        .route("/collections/:name/membership-tags/add", post(add_collection_tag))
+        .route("/collections/:name/membership-tags/remove", post(remove_collection_tag))
+        .route("/collections/:name/membership-tags", get(list_collection_tags))
+        .route("/collections/by-tag/:tagname", get(collections_by_tag))
         .route("/repo/:collection/:filename/export", get(export_collection))
         .route("/internal/callback", post(ipc_callback))
         .route("/logs", get(get_logs))

@@ -2,7 +2,9 @@
 // SQL keys reference webserver/libs/edms/src/queries.yaml.
 // Per-row CRUD lives in webserver/libs/edms/src/ops/tag_ops.rs.
 
-mod db;
+pub mod db;
+pub mod collection_tags;
+pub mod merge;
 mod ops;
 pub mod types;
 
