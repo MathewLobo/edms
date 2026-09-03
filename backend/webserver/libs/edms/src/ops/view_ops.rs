@@ -60,6 +60,23 @@ impl ViewCatalogOps {
         self.core
             .cproc(query, &[], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
     }
+
+    /// One catalog row by name — (name, file_path, created_at) — mainly to
+    /// look up file_path before deleting the underlying file.
+    pub fn get(&self, kind: ViewKind, name: &str) -> EdmsResult<Option<(String, Option<String>, String)>> {
+        let key = format!("{}_GET", kind.prefix());
+        let query = self.queries.get_catalog_query(&key).unwrap();
+        let rows = self
+            .core
+            .cproc(query, &[&name], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        Ok(rows.into_iter().next())
+    }
+
+    pub fn remove(&self, kind: ViewKind, name: &str) -> EdmsResult<usize> {
+        let key = format!("{}_REMOVE", kind.prefix());
+        let query = self.queries.get_catalog_query(&key).unwrap();
+        self.core.proc(query, &[&name])
+    }
 }
 
 /// Central per-view-type tag count rollups — tagname + an incrementally
