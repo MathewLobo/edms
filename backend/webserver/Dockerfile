@@ -10,6 +10,10 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /compute
 COPY compute/Cargo.toml compute/Cargo.lock ./
 COPY compute/src ./src
+# compute/Cargo.toml depends on edms via a relative path
+# (../webserver/libs/edms), so that crate has to exist in the build
+# context too, at the same relative location, before `cargo build` runs.
+COPY webserver/libs /webserver/libs
 RUN cargo build --release
 
 # ── Stage 2: Build rust-webserver from webserver/ ───────────────────
