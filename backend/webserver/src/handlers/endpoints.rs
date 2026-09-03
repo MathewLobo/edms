@@ -61,15 +61,21 @@ pub async fn create_endpoint(
                 }),
             )
         }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(CreateEndpointResponse {
-                success: false,
-                message: format!("Failed to create endpoint: {e:?}"),
-            }),
-        ),
+        Err(e) => {
+            let message = if db::is_unique_violation(&e) {
+                format!("Endpoint '{}' already exists", payload.endpoint_id)
+            } else {
+                format!("Failed to create endpoint: {e:?}")
+            };
+            (
+                StatusCode::BAD_REQUEST,
+                Json(CreateEndpointResponse {
+                    success: false,
+                    message,
+                }),
+            )
+        }
     }
-    
 }
 
 use axum::extract::Path;
