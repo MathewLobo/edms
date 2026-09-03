@@ -226,7 +226,7 @@ async fn handle_ws_run(mut socket: WebSocket, state: AppState) {
     loop {
         tokio::select! {
             Ok(evt) = rx.recv() => {
-                let msg = json!({ "type": "event", "event": evt });
+                let msg = evt.to_ws_message("test_view");
                 if socket.send(Message::Text(msg.to_string())).await.is_err() {
                     break;
                 }
@@ -389,7 +389,7 @@ async fn handle_ws_subscribe_endpoints(mut socket: WebSocket, state: AppState) {
 
     let mut rx = state.events_tx.subscribe();
     while let Ok(evt) = rx.recv().await {
-        let msg = json!({ "type": "event", "event": evt });
+        let msg = evt.to_ws_message("test_view");
         if socket.send(Message::Text(msg.to_string())).await.is_err() {
             break;
         }
@@ -416,7 +416,7 @@ async fn handle_ws_subscribe_bookmarks(mut socket: WebSocket, state: AppState) {
 
     let mut rx = state.events_tx.subscribe();
     while let Ok(evt) = rx.recv().await {
-        let msg = json!({ "type": "event", "event": evt });
+        let msg = evt.to_ws_message("test_view");
         if socket.send(Message::Text(msg.to_string())).await.is_err() {
             break;
         }

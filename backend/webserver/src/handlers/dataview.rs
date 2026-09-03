@@ -112,7 +112,7 @@ async fn handle_ws_make_active(mut socket: WebSocket, state: AppState, folder: S
     // 4. Stream events over WS
     let mut rx = state.events_tx.subscribe();
     while let Ok(evt) = rx.recv().await {
-        let msg = json!({ "type": "event", "event": evt });
+        let msg = evt.to_ws_message("dataview");
         if socket.send(Message::Text(msg.to_string())).await.is_err() {
             break;
         }
