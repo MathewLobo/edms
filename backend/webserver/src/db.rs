@@ -15,6 +15,23 @@ pub struct EndpointDto {
     pub method: Option<String>,
 }
 
+/// True if `err` is a UNIQUE/PRIMARY KEY constraint violation — the case
+/// worth turning into a clean "already exists" message instead of the raw
+/// SQLite debug string. Also added on bookmark_ops (not yet merged here) —
+/// identical, so merging later just deduplicates this.
+pub fn is_unique_violation(err: &EdmsError) -> bool {
+    matches!(
+        err,
+        EdmsError::SqliteError(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ErrorCode::ConstraintViolation,
+                ..
+            },
+            _,
+        ))
+    )
+}
+
 /* ---------------- endpoints (queries.yaml) ---------------- */
 
 pub fn insert_endpoint(core: &EdmsCore, queries: &QueryMap, ep: &EndpointDto) -> EdmsResult<usize> {

@@ -151,6 +151,115 @@ pub async fn create_collection_entry(
     }
 }
 
+/// GET /collections/:name — one collection's catalog row, not the full list.
+pub async fn get_collection_entry(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let res = tokio::task::spawn_blocking({
+        let state = state.clone();
+        let name = name.clone();
+        move || -> Result<Option<(String, Option<String>, String)>, String> {
+            let catalog = open_catalog(&state)?;
+            catalog.get(ViewKind::Collections, &name).map_err(|e| format!("{e:?}"))
+        }
+    })
+    .await;
+
+    match res {
+        Ok(Ok(Some((name, file_path, created_at)))) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "name": name, "file_path": file_path, "created_at": created_at })),
+        ),
+        Ok(Ok(None)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "error": format!("Collection '{name}' does not exist") })),
+        ),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RenameViewRequest {
+    pub new_name: String,
+}
+
+/// POST /collections/:name/rename — renames the catalog entry AND moves
+/// the collection's own file on disk to match, so name and file basename
+/// never drift apart.
+pub async fn rename_collection_entry(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(payload): Json<RenameViewRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let res = tokio::task::spawn_blocking({
+        let state = state.clone();
+        let old_name = name.clone();
+        let new_name = payload.new_name.clone();
+        move || -> Result<usize, String> {
+            let catalog = open_catalog(&state)?;
+            let row = catalog
+                .get(ViewKind::Collections, &old_name)
+                .map_err(|e| format!("{e:?}"))?
+                .ok_or_else(|| format!("Collection '{old_name}' does not exist"))?;
+            let old_path = row.1.ok_or_else(|| format!("Collection '{old_name}' has no file yet"))?;
+
+            // Reject a name collision before touching anything — a plain
+            // file rename onto an existing path would silently overwrite
+            // it, which would destroy that other collection's data.
+            if catalog
+                .get(ViewKind::Collections, &new_name)
+                .map_err(|e| format!("{e:?}"))?
+                .is_some()
+            {
+                return Err(format!("Collection '{new_name}' already exists"));
+            }
+
+            let new_path = collection_file_path(&state, &new_name);
+
+            // Update the catalog row first — its UNIQUE constraint is the
+            // real safety net against a race (two renames to the same new
+            // name at once), and if it fails, the file is never touched.
+            let rows = catalog
+                .rename(ViewKind::Collections, &old_name, &new_name, Some(&new_path))
+                .map_err(|e| {
+                    if db::is_unique_violation(&e) {
+                        format!("Collection '{new_name}' already exists")
+                    } else {
+                        format!("{e:?}")
+                    }
+                })?;
+
+            // Now move the file to match. If this fails, roll back the
+            // catalog row so it doesn't point at a path that doesn't
+            // actually hold the renamed file.
+            if let Err(e) = std::fs::rename(&old_path, &new_path) {
+                let _ = catalog.rename(ViewKind::Collections, &new_name, &old_name, Some(&old_path));
+                return Err(format!("failed to rename collection file, rolled back: {e}"));
+            }
+
+            Ok(rows)
+        }
+    })
+    .await;
+
+    match res {
+        Ok(Ok(rows)) => {
+            state.refresh_dashboard_snapshot();
+            (StatusCode::OK, Json(json!({ "ok": true, "renamed_rows": rows })))
+        }
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        ),
+    }
+}
+
 /// POST /collections/:name/delete — removes the catalog row and deletes
 /// the collection's own file from disk.
 pub async fn delete_collection_entry(

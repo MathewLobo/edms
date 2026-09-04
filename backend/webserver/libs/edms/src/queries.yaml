@@ -190,6 +190,9 @@ catalog:
   COLLECTIONS_REMOVE:
     help: "Remove a collection's catalog entry (its file is deleted separately)"
     query: "DELETE FROM collections WHERE name = ?"
+  COLLECTIONS_RENAME:
+    help: "Rename a collection and repoint its file_path to match (the file itself is renamed separately on disk)"
+    query: "UPDATE collections SET name = ?, file_path = ? WHERE name = ?"
   WEBVIEW_CREATE:
     help: "Register a new webview in the catalog"
     query: "INSERT INTO webview (name, file_path) VALUES (?, ?)"
@@ -202,6 +205,9 @@ catalog:
   WEBVIEW_REMOVE:
     help: "Remove a webview's catalog entry"
     query: "DELETE FROM webview WHERE name = ?"
+  WEBVIEW_RENAME:
+    help: "Rename a webview and repoint its file_path to match"
+    query: "UPDATE webview SET name = ?, file_path = ? WHERE name = ?"
   REPOVIEW_CREATE:
     help: "Register a new repoview in the catalog"
     query: "INSERT INTO repoview (name, file_path) VALUES (?, ?)"
@@ -214,6 +220,9 @@ catalog:
   REPOVIEW_REMOVE:
     help: "Remove a repoview's catalog entry"
     query: "DELETE FROM repoview WHERE name = ?"
+  REPOVIEW_RENAME:
+    help: "Rename a repoview and repoint its file_path to match"
+    query: "UPDATE repoview SET name = ?, file_path = ? WHERE name = ?"
 
 # Central per-view-type tag count rollups (tagname, count) — incrementally
 # maintained counters, not a full tag entity with membership tracking.
