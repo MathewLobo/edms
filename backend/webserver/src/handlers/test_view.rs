@@ -456,7 +456,7 @@ async fn handle_ws_subscribe_bookmarks(mut socket: WebSocket, state: AppState) {
     }
 }
 
-async fn handle_ws_add_from_history(mut socket: WebSocket, state: AppState, _bookmark: String) {
+async fn handle_ws_add_from_history(mut socket: WebSocket, state: AppState, bookmark: String) {
     while let Some(Ok(msg)) = socket.recv().await {
         let text = match msg {
             Message::Text(t) => t,
@@ -471,7 +471,8 @@ async fn handle_ws_add_from_history(mut socket: WebSocket, state: AppState, _boo
         let res = tokio::task::spawn_blocking({
             let st = state.clone();
             let eid = endpoint_id.clone();
-            move || db::insert_bookmark_active(&st.core, &st.queries, &eid, None)
+            let folder = bookmark.clone();
+            move || db::insert_bookmark(&st.core, &st.queries, &eid, &folder, None)
         })
         .await;
 
@@ -479,7 +480,8 @@ async fn handle_ws_add_from_history(mut socket: WebSocket, state: AppState, _boo
             Ok(Ok(_)) => {
                 let count = tokio::task::spawn_blocking({
                     let st = state.clone();
-                    move || db::bookmarks_count_active(&st.core, &st.queries)
+                    let folder = bookmark.clone();
+                    move || db::bookmarks_count(&st.core, &st.queries, &folder)
                 })
                 .await
                 .unwrap_or(Ok(0))
@@ -498,7 +500,7 @@ async fn handle_ws_add_from_history(mut socket: WebSocket, state: AppState, _boo
     }
 }
 
-async fn handle_ws_delete_from_bookmark(mut socket: WebSocket, state: AppState, _bookmark: String) {
+async fn handle_ws_delete_from_bookmark(mut socket: WebSocket, state: AppState, bookmark: String) {
     while let Some(Ok(msg)) = socket.recv().await {
         let text = match msg {
             Message::Text(t) => t,
@@ -513,7 +515,8 @@ async fn handle_ws_delete_from_bookmark(mut socket: WebSocket, state: AppState, 
         let res = tokio::task::spawn_blocking({
             let st = state.clone();
             let eid = endpoint_id.clone();
-            move || db::delete_bookmark_active(&st.core, &st.queries, &eid)
+            let folder = bookmark.clone();
+            move || db::delete_bookmark(&st.core, &st.queries, &eid, &folder)
         })
         .await;
 
@@ -521,7 +524,8 @@ async fn handle_ws_delete_from_bookmark(mut socket: WebSocket, state: AppState, 
             Ok(Ok(_)) => {
                 let count = tokio::task::spawn_blocking({
                     let st = state.clone();
-                    move || db::bookmarks_count_active(&st.core, &st.queries)
+                    let folder = bookmark.clone();
+                    move || db::bookmarks_count(&st.core, &st.queries, &folder)
                 })
                 .await
                 .unwrap_or(Ok(0))

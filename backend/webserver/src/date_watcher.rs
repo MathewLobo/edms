@@ -111,26 +111,34 @@ mod tests {
     #[test]
     fn rollover_captures_a_snapshot_for_the_day_that_ended() {
         let (paths, conn) = setup();
-        let day1 = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
-        let day2 = NaiveDate::from_ymd_opt(2026, 8, 2).unwrap();
+        // Relative to today, not hardcoded — rotate_old_daily_snapshots
+        // (called inside check_date_rollover) deletes anything older than
+        // 30 real days, so a fixed date here goes stale and gets rotated
+        // away the moment real time passes it by. day1 must stay well
+        // inside the retention window no matter when this test runs.
+        let today = chrono::Utc::now().date_naive();
+        let day1 = today - chrono::Duration::days(2);
+        let day2 = today - chrono::Duration::days(1);
+        let day1_str = day1.to_string();
 
         let result = check_date_rollover(&conn, &paths.edms_db, &paths.dir, day1, day2);
 
         assert_eq!(result, day2);
-        let snap = dashboard_db::get_daily_snapshot(&conn, "2026-08-01")
+        let snap = dashboard_db::get_daily_snapshot(&conn, &day1_str)
             .unwrap()
             .expect("snapshot for day1 should have been captured");
-        assert_eq!(snap.snapshot_date, "2026-08-01");
+        assert_eq!(snap.snapshot_date, day1_str);
     }
 
     #[test]
     fn same_day_captures_nothing() {
         let (paths, conn) = setup();
-        let day1 = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+        let day1 = chrono::Utc::now().date_naive() - chrono::Duration::days(2);
+        let day1_str = day1.to_string();
 
         check_date_rollover(&conn, &paths.edms_db, &paths.dir, day1, day1);
 
-        assert!(dashboard_db::get_daily_snapshot(&conn, "2026-08-01").unwrap().is_none());
+        assert!(dashboard_db::get_daily_snapshot(&conn, &day1_str).unwrap().is_none());
     }
 
     #[test]
