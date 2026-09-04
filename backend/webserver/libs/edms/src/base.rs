@@ -31,7 +31,7 @@ impl EdmsBase {
         // do not trigger ExecuteReturnedResults errors from conn.execute().
         conn.execute_batch(
             "PRAGMA foreign_keys = OFF;
-             PRAGMA journal_mode = WAL;
+             PRAGMA journal_mode = DELETE;
              PRAGMA busy_timeout = 5000;"
         )?;
         *conn_guard = Some(conn);

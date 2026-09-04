@@ -17,18 +17,24 @@ No data persistence — every `docker run` starts fresh. Fine for quick checks.
 ### Option B — Docker Compose (recommended, persists data across restarts)
 ```bash
 cd backend
-# first time only — the bind-mounted db file must exist before Docker mounts it,
-# otherwise Docker creates it as a directory instead of a file
-touch webserver/edms.db
+mkdir -p webserver/data   # first time only
 docker compose up --build -d
 ```
-Stop it with `docker compose down`. Data survives via named/bind-mounted volumes (`edms.db`, `edms_data`, `edms_root`).
+Stop it with `docker compose down`. `edms.db` lands at `backend/webserver/data/edms.db` on your host — you can open it directly with any SQLite tool. `edms_data`/`edms_root` persist via named Docker volumes (not directly browsable as host folders — use `docker cp` to pull files out if you need to look at them).
+
+> **Note:** this used to bind-mount a single file (`./webserver/edms.db:/app/edms.db`) rather than a directory. On Docker Desktop for Windows, single-file bind mounts don't reliably sync writes back to the host — the container would run fine, but the host-side copy would silently stay empty forever. Mounting a directory instead fixed it. If you're on an older checkout that still does the single-file version, switch to this.
 
 ### Option C — native (Rust toolchain required)
 ```bash
 cd backend/webserver
 cargo run --bin rust-webserver
 ```
+
+### Inspecting the data directly (no SQLite CLI needed)
+```bash
+python -c "import sqlite3; c = sqlite3.connect('webserver/data/edms.db'); print(c.execute('SELECT * FROM endpoints').fetchall())"
+```
+Swap the table name (`endpoints`, `tags`, `bookmarks`, `history`, `collections`) or the db path as needed. For a collection's own file, pull it out of the volume first: `docker cp backend-webserver-1:/app/edms_root/storage/collections/<name>.sqlite .` then point the same command at it (table name is `membership` there).
 
 ---
 

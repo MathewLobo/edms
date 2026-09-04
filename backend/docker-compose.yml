@@ -8,12 +8,12 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./webserver/edms.db:/app/edms.db
+      - ./webserver/data:/app/data
       - webserver-data:/app/edms_data
       - edms-root:/app/edms_root
     environment:
       - RUST_LOG=info
-      - EDMS_DB_PATH=/app/edms.db
+      - EDMS_DB_PATH=/app/data/edms.db
 
 volumes:
   webserver-data:
