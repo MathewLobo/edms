@@ -84,13 +84,17 @@ async fn handle_run_test(state: &AppState, callback: &IpcCallback) {
     // Must match the {eid}-response-{N}.json filename write_response_file
     // actually produces (compute::endpoint_writer) — see the matching note
     // on request_file in test_view.rs.
-    let response_file    = format!("edms_data/{}/{}-response-{}.json", endpoint_id, endpoint_id, request_number);
+    let response_file    = state
+        .endpoint_storage_dir(&endpoint_id)
+        .join(format!("{endpoint_id}-response-{request_number}.json"))
+        .display()
+        .to_string();
 
     // Spawn edms-child to write the response file to disk
     crate::ipc::spawn_child(
         "write_response",
         serde_json::json!({
-            "repo_path":  format!("edms_data/{}", endpoint_id),
+            "repo_path":  state.endpoint_storage_dir(&endpoint_id).display().to_string(),
             "eid":        endpoint_id,
             "res_index":  request_number,
             "content":    serde_json::to_string(&response_body).unwrap_or_default(),
