@@ -15,6 +15,22 @@ pub struct EndpointDto {
     pub method: Option<String>,
 }
 
+/// True if `err` is a UNIQUE/PRIMARY KEY constraint violation — the case
+/// worth turning into a clean "already exists" message instead of the raw
+/// SQLite debug string.
+pub fn is_unique_violation(err: &EdmsError) -> bool {
+    matches!(
+        err,
+        EdmsError::SqliteError(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ErrorCode::ConstraintViolation,
+                ..
+            },
+            _,
+        ))
+    )
+}
+
 /* ---------------- endpoints (queries.yaml) ---------------- */
 
 pub fn insert_endpoint(core: &EdmsCore, queries: &QueryMap, ep: &EndpointDto) -> EdmsResult<usize> {
@@ -155,10 +171,15 @@ pub fn list_history(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<Vec<Histo
 
 /* ---------------- bookmarks table (direct SQL) ---------------- */
 
-pub fn bookmarks_count_active(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<usize> {
+/// Count bookmarks in an arbitrary folder (not just `active`).
+pub fn bookmarks_count(core: &EdmsCore, queries: &QueryMap, folder: &str) -> EdmsResult<usize> {
     let q = queries.get_bookmark_query("B1").ok_or(EdmsError::UnknownError)?;
-    let rows: Vec<i64> = core.cproc(q, &[&ACTIVE_FOLDER], |row| row.get(0))?;
+    let rows: Vec<i64> = core.cproc(q, &[&folder], |row| row.get(0))?;
     Ok(rows.first().copied().unwrap_or(0) as usize)
+}
+
+pub fn bookmarks_count_active(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<usize> {
+    bookmarks_count(core, queries, ACTIVE_FOLDER)
 }
 
 pub fn clear_bookmarks_active(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<usize> {
@@ -172,33 +193,45 @@ pub fn list_bookmarked_endpoints_active(core: &EdmsCore, queries: &QueryMap) -> 
     core.cproc(q, &[&ACTIVE_FOLDER], |row| row.get(0))
 }
 
-pub fn insert_bookmark_active(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str, notes: Option<&str>) -> EdmsResult<usize> {
+/// Bookmark an endpoint into an arbitrary folder (not just `active`).
+/// Used by any caller that has a real target folder in hand — e.g. from a
+/// URL path param — rather than always meaning the working set.
+pub fn insert_bookmark(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str, folder: &str, notes: Option<&str>) -> EdmsResult<usize> {
     // Check if already bookmarked to avoid duplicates
     let b4 = queries.get_bookmark_query("B4").ok_or(EdmsError::UnknownError)?;
     let existing: Vec<i64> = core.cproc(
         b4,
-        &[&ACTIVE_FOLDER, &endpoint_id],
+        &[&folder, &endpoint_id],
         |row| row.get(0)
     )?;
-    
+
     if existing.first().copied().unwrap_or(0) > 0 {
         // Already bookmarked, return 0 rows affected
         return Ok(0);
     }
-    
+
     let b5 = queries.get_bookmark_query("B5").ok_or(EdmsError::UnknownError)?;
     core.proc(
         b5,
-        &[&endpoint_id, &ACTIVE_FOLDER, &notes],
+        &[&endpoint_id, &folder, &notes],
     )
 }
 
-pub fn delete_bookmark_active(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str) -> EdmsResult<usize> {
+/// Remove a bookmark from an arbitrary folder (not just `active`).
+pub fn delete_bookmark(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str, folder: &str) -> EdmsResult<usize> {
     let b6 = queries.get_bookmark_query("B6").ok_or(EdmsError::UnknownError)?;
     core.proc(
         b6,
-        &[&ACTIVE_FOLDER, &endpoint_id],
+        &[&folder, &endpoint_id],
     )
+}
+
+pub fn insert_bookmark_active(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str, notes: Option<&str>) -> EdmsResult<usize> {
+    insert_bookmark(core, queries, endpoint_id, ACTIVE_FOLDER, notes)
+}
+
+pub fn delete_bookmark_active(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str) -> EdmsResult<usize> {
+    delete_bookmark(core, queries, endpoint_id, ACTIVE_FOLDER)
 }
 
 /* ---------------- collections (folder column) ---------------- */
