@@ -17,12 +17,19 @@ No data persistence — every `docker run` starts fresh. Fine for quick checks.
 ### Option B — Docker Compose (recommended, persists data across restarts)
 ```bash
 cd backend
-mkdir -p webserver/data   # first time only
 docker compose up --build -d
 ```
-Stop it with `docker compose down`. `edms.db` lands at `backend/webserver/data/edms.db` on your host — you can open it directly with any SQLite tool. `edms_data`/`edms_root` persist via named Docker volumes (not directly browsable as host folders — use `docker cp` to pull files out if you need to look at them).
+Stop it with `docker compose down`. `edms.db` lands at `backend/webserver/data/edms.db` on your host — you can open it directly with any SQLite tool (Docker auto-creates that folder, no manual setup needed). `edms_data`/`edms_root` persist via named Docker volumes (not directly browsable as host folders — use `docker cp` to pull files out if you need to look at them).
 
-> **Note:** this used to bind-mount a single file (`./webserver/edms.db:/app/edms.db`) rather than a directory. On Docker Desktop for Windows, single-file bind mounts don't reliably sync writes back to the host — the container would run fine, but the host-side copy would silently stay empty forever. Mounting a directory instead fixed it. If you're on an older checkout that still does the single-file version, switch to this.
+To wipe everything and start fresh:
+```bash
+docker compose down -v
+rm -rf webserver/data
+```
+
+> **Two things worth knowing if you're on an older checkout:**
+> 1. `edms.db` used to be bind-mounted as a single file (`./webserver/edms.db:/app/edms.db`) rather than a directory. On Docker Desktop for Windows, single-file bind mounts don't reliably sync writes back to the host — the container ran fine, but the host-side copy silently stayed empty forever. Mounting a directory instead fixed it.
+> 2. Separately, any endpoint that opens its own SQLite connection per request (not the app's shared one — e.g. collections, tags) could fail with `CannotOpen` under Docker specifically, even after fix #1. Docker Desktop for Windows bind mounts don't reliably support the shared-memory locking WAL mode needs for a second connection to the same file. Fixed by switching `journal_mode` to `DELETE` in `base.rs`.
 
 ### Option C — native (Rust toolchain required)
 ```bash
