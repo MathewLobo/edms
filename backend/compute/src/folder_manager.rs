@@ -44,7 +44,7 @@ impl FolderLayout {
             "account-data",
             "storage",
             "storage/history",
-            "storage/endpoints",
+            "storage/globalEQPData",
             "storage/collections",
             "storage/repoview",
             "storage/webview",

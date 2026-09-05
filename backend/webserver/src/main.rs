@@ -40,8 +40,10 @@ use handlers::{
     },
     view::{home, list_view, test_view},
     view_catalog::{
-        create_collection_entry, create_repoview_entry, create_webview_entry, list_collections,
-        list_repoviews, list_webviews,
+        add_endpoint_to_collection, create_collection_entry, create_repoview_entry,
+        create_webview_entry, delete_collection_entry, get_collection_entry,
+        list_collection_endpoints, list_collections, list_repoviews, list_webviews,
+        remove_endpoint_from_collection, rename_collection_entry,
     },
     view_tags::{
         create_collections_tag, create_repoview_tag, create_webview_tag, delete_collections_tags,
@@ -166,6 +168,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/dashboard/compare", get(compare_daily_snapshots))
         .route("/collections/create", post(create_collection_entry))
         .route("/collections/list", get(list_collections))
+        .route("/collections/:name", get(get_collection_entry))
+        .route("/collections/:name/rename", post(rename_collection_entry))
+        .route("/collections/:name/delete", post(delete_collection_entry))
+        .route("/collections/:name/endpoints/add", post(add_endpoint_to_collection))
+        .route("/collections/:name/endpoints/remove", post(remove_endpoint_from_collection))
+        .route("/collections/:name/endpoints", get(list_collection_endpoints))
         .route("/collections/tags/create", post(create_collections_tag))
         .route("/collections/tags/delete", post(delete_collections_tags))
         .route("/collections/tags/rename", post(rename_collections_tag))

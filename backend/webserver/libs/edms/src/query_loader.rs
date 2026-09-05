@@ -18,6 +18,7 @@ pub struct QueryMap {
     pub catalog: HashMap<String, QueryConfig>,
     pub view_tag_counts: HashMap<String, QueryConfig>,
     pub merge: HashMap<String, QueryConfig>,
+    pub collection_membership: HashMap<String, QueryConfig>,
 }
 
 impl QueryMap {
@@ -61,5 +62,9 @@ impl QueryMap {
 
     pub fn get_merge_query(&self, key: &str) -> Option<&str> {
         self.merge.get(key).map(|c| c.query.as_str())
+    }
+
+    pub fn get_collection_membership_query(&self, key: &str) -> Option<&str> {
+        self.collection_membership.get(key).map(|c| c.query.as_str())
     }
 }

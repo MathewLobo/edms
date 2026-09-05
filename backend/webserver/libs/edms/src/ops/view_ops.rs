@@ -60,6 +60,39 @@ impl ViewCatalogOps {
         self.core
             .cproc(query, &[], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
     }
+
+    /// One catalog row by name — (name, file_path, created_at) — mainly to
+    /// look up file_path before deleting the underlying file.
+    pub fn get(&self, kind: ViewKind, name: &str) -> EdmsResult<Option<(String, Option<String>, String)>> {
+        let key = format!("{}_GET", kind.prefix());
+        let query = self.queries.get_catalog_query(&key).unwrap();
+        let rows = self
+            .core
+            .cproc(query, &[&name], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        Ok(rows.into_iter().next())
+    }
+
+    pub fn remove(&self, kind: ViewKind, name: &str) -> EdmsResult<usize> {
+        let key = format!("{}_REMOVE", kind.prefix());
+        let query = self.queries.get_catalog_query(&key).unwrap();
+        self.core.proc(query, &[&name])
+    }
+
+    /// Renames the catalog row and repoints file_path to `new_file_path` in
+    /// one go — the caller is responsible for actually moving the file on
+    /// disk to that path first (or after; either order is fine as long as
+    /// both happen, since this only touches the catalog row).
+    pub fn rename(
+        &self,
+        kind: ViewKind,
+        old_name: &str,
+        new_name: &str,
+        new_file_path: Option<&str>,
+    ) -> EdmsResult<usize> {
+        let key = format!("{}_RENAME", kind.prefix());
+        let query = self.queries.get_catalog_query(&key).unwrap();
+        self.core.proc(query, &[&new_name, &new_file_path, &old_name])
+    }
 }
 
 /// Central per-view-type tag count rollups — tagname + an incrementally

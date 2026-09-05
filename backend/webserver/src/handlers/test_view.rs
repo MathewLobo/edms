@@ -334,7 +334,11 @@ async fn run_test_impl(
     // Must match the {eid}-request-{N}.json filename write_request_file
     // actually produces (compute::endpoint_writer) — these two were out of
     // sync before, meaning the file this points at didn't exist.
-    let request_file = format!("edms_data/{}/{}-request-{}.json", endpoint_id, endpoint_id, request_number);
+    let request_file = state
+        .endpoint_storage_dir(endpoint_id)
+        .join(format!("{endpoint_id}-request-{request_number}.json"))
+        .display()
+        .to_string();
 
     tokio::task::spawn_blocking({
         let st = state.clone();
@@ -352,7 +356,7 @@ async fn run_test_impl(
     ipc::spawn_child(
         "write_request",
         json!({
-            "repo_path":  format!("edms_data/{}", endpoint_id),
+            "repo_path":  state.endpoint_storage_dir(endpoint_id).display().to_string(),
             "eid":        endpoint_id,
             "req_index":  request_number,
             "content":    serde_json::to_string(&request_json).unwrap_or_default(),
@@ -561,6 +565,7 @@ fn safe_id(id: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
 }
 
 async fn read_saved_file(
+    state: &AppState,
     endpoint_id: &str,
     request_number: i64,
     kind: &str,
@@ -568,7 +573,9 @@ async fn read_saved_file(
     if let Err(e) = safe_id(endpoint_id) {
         return e;
     }
-    let path = format!("edms_data/{endpoint_id}/{endpoint_id}-{kind}-{request_number}.json");
+    let path = state
+        .endpoint_storage_dir(endpoint_id)
+        .join(format!("{endpoint_id}-{kind}-{request_number}.json"));
     match tokio::fs::read_to_string(&path).await {
         Ok(content) => {
             let body: serde_json::Value =
@@ -584,14 +591,16 @@ async fn read_saved_file(
 
 /// GET /test-view/{endpoint_id}/request/{request_number}
 pub async fn get_saved_request(
+    State(state): State<AppState>,
     Path((endpoint_id, request_number)): Path<(String, i64)>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    read_saved_file(&endpoint_id, request_number, "request").await
+    read_saved_file(&state, &endpoint_id, request_number, "request").await
 }
 
 /// GET /test-view/{endpoint_id}/response/{request_number}
 pub async fn get_saved_response(
+    State(state): State<AppState>,
     Path((endpoint_id, request_number)): Path<(String, i64)>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    read_saved_file(&endpoint_id, request_number, "response").await
+    read_saved_file(&state, &endpoint_id, request_number, "response").await
 }

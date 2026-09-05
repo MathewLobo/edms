@@ -84,13 +84,17 @@ async fn handle_run_test(state: &AppState, callback: &IpcCallback) {
     // Must match the {eid}-response-{N}.json filename write_response_file
     // actually produces (compute::endpoint_writer) — see the matching note
     // on request_file in test_view.rs.
-    let response_file    = format!("edms_data/{}/{}-response-{}.json", endpoint_id, endpoint_id, request_number);
+    let response_file    = state
+        .endpoint_storage_dir(&endpoint_id)
+        .join(format!("{endpoint_id}-response-{request_number}.json"))
+        .display()
+        .to_string();
 
     // Spawn edms-child to write the response file to disk
     crate::ipc::spawn_child(
         "write_response",
         serde_json::json!({
-            "repo_path":  format!("edms_data/{}", endpoint_id),
+            "repo_path":  state.endpoint_storage_dir(&endpoint_id).display().to_string(),
             "eid":        endpoint_id,
             "res_index":  request_number,
             "content":    serde_json::to_string(&response_body).unwrap_or_default(),
@@ -122,6 +126,36 @@ async fn handle_run_test(state: &AppState, callback: &IpcCallback) {
             Ok(Err(e)) => warn!("[callback] failed to insert response_metadata: {e:?}"),
             Err(e) => warn!("[callback] failed to join insert_response_metadata task: {e}"),
         }
+    }
+
+    // Record this QP pair in History automatically — per Ravi's email
+    // (2026-09-03), every completed test is auto-linked into History with
+    // no manual step; only promoting one into Bookmarks is a deliberate
+    // user action. POST /test-view/save/history remains available for
+    // anything that wants to log a history entry without a real test run.
+    let history_count = {
+        let st = state.clone();
+        let eid = endpoint_id.clone();
+        let details = format!("{status_code} in {response_time_ms}ms");
+        let res = tokio::task::spawn_blocking(move || {
+            crate::db::insert_history(&st.core, &st.queries, &eid, "test", Some(&details))?;
+            crate::db::history_count(&st.core, &st.queries)
+        })
+        .await;
+        match res {
+            Ok(Ok(count)) => Some(count),
+            Ok(Err(e)) => {
+                warn!("[callback] failed to auto-record history: {e:?}");
+                None
+            }
+            Err(e) => {
+                warn!("[callback] failed to join auto-record-history task: {e}");
+                None
+            }
+        }
+    };
+    if let Some(count) = history_count {
+        state.emit(ServerEvent::HistoryUpdated { count }).await;
     }
 
     // Test finished for real — stop the app's own countdown so it doesn't

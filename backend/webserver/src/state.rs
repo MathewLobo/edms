@@ -75,6 +75,16 @@ impl AppState {
         let _ = self.events_tx.send(evt);
     }
 
+    /// Where one endpoint's request/response files live, per the Sept-1
+    /// storage schema: storage/globalEQPData/{endpoint_id}/ under the
+    /// storage root — not the old edms_data/{endpoint_id}/ path some code
+    /// still used. Absolute (storage_root already is), so it's unambiguous
+    /// regardless of which process's CWD reads/writes it (webserver vs.
+    /// the spawned edms-child).
+    pub fn endpoint_storage_dir(&self, endpoint_id: &str) -> PathBuf {
+        self.storage_root.join("storage").join("globalEQPData").join(endpoint_id)
+    }
+
     /// Takes a new dashboard snapshot using the current state's paths.
     /// Call this after any change that should be reflected immediately
     /// (e.g. a new endpoint being created).

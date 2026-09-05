@@ -184,18 +184,45 @@ catalog:
   COLLECTIONS_LIST:
     help: "List all registered collections"
     query: "SELECT name, file_path, created_at FROM collections ORDER BY name"
+  COLLECTIONS_GET:
+    help: "Get one collection's catalog row by name (to find its file_path)"
+    query: "SELECT name, file_path, created_at FROM collections WHERE name = ?"
+  COLLECTIONS_REMOVE:
+    help: "Remove a collection's catalog entry (its file is deleted separately)"
+    query: "DELETE FROM collections WHERE name = ?"
+  COLLECTIONS_RENAME:
+    help: "Rename a collection and repoint its file_path to match (the file itself is renamed separately on disk)"
+    query: "UPDATE collections SET name = ?, file_path = ? WHERE name = ?"
   WEBVIEW_CREATE:
     help: "Register a new webview in the catalog"
     query: "INSERT INTO webview (name, file_path) VALUES (?, ?)"
   WEBVIEW_LIST:
     help: "List all registered webviews"
     query: "SELECT name, file_path, created_at FROM webview ORDER BY name"
+  WEBVIEW_GET:
+    help: "Get one webview's catalog row by name (to find its file_path)"
+    query: "SELECT name, file_path, created_at FROM webview WHERE name = ?"
+  WEBVIEW_REMOVE:
+    help: "Remove a webview's catalog entry"
+    query: "DELETE FROM webview WHERE name = ?"
+  WEBVIEW_RENAME:
+    help: "Rename a webview and repoint its file_path to match"
+    query: "UPDATE webview SET name = ?, file_path = ? WHERE name = ?"
   REPOVIEW_CREATE:
     help: "Register a new repoview in the catalog"
     query: "INSERT INTO repoview (name, file_path) VALUES (?, ?)"
   REPOVIEW_LIST:
     help: "List all registered repoviews"
     query: "SELECT name, file_path, created_at FROM repoview ORDER BY name"
+  REPOVIEW_GET:
+    help: "Get one repoview's catalog row by name (to find its file_path)"
+    query: "SELECT name, file_path, created_at FROM repoview WHERE name = ?"
+  REPOVIEW_REMOVE:
+    help: "Remove a repoview's catalog entry"
+    query: "DELETE FROM repoview WHERE name = ?"
+  REPOVIEW_RENAME:
+    help: "Rename a repoview and repoint its file_path to match"
+    query: "UPDATE repoview SET name = ?, file_path = ? WHERE name = ?"
 
 # Central per-view-type tag count rollups (tagname, count) — incrementally
 # maintained counters, not a full tag entity with membership tracking.
@@ -265,3 +292,23 @@ merge:
   CT_MERGE:
     help: "Merge collection tags from source to target"
     query: "INSERT OR IGNORE INTO collection_tag_memberships (collection_name, tagname) SELECT ?, tagname FROM collection_tag_memberships WHERE collection_name = ?"
+
+# Per-collection endpoint membership — run against ONE collection's own
+# SQLite file (storage/collections/{name}.sqlite), not the shared edms.db.
+# Per Ravi (2026-09-03): each collection file holds just endpoint_id +
+# when it was added — no folder column needed, the file itself is the
+# scope. Not to be confused with collection_tag_memberships (merge/? above),
+# which tracks TAG presence per collection in the shared db, not endpoints.
+collection_membership:
+  ADD:
+    help: "Add an endpoint to this collection's file (idempotent)"
+    query: "INSERT OR IGNORE INTO membership (endpoint_id) VALUES (?)"
+  REMOVE:
+    help: "Remove an endpoint from this collection's file"
+    query: "DELETE FROM membership WHERE endpoint_id = ?"
+  LIST:
+    help: "List all endpoints in this collection's file, oldest-added first"
+    query: "SELECT endpoint_id, added_at FROM membership ORDER BY added_at"
+  COUNT:
+    help: "Count endpoints in this collection's file"
+    query: "SELECT COUNT(*) FROM membership"
