@@ -5,3 +5,4 @@ pub mod markdown_generator;
 pub mod markdown_meta;
 pub mod endpoint_writer;
 pub mod tagops;
+pub mod eid;

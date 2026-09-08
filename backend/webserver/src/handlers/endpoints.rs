@@ -8,7 +8,8 @@ const VALID_METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
 #[derive(Debug, Deserialize)]
 pub struct CreateEndpointRequest {
-    pub endpoint_id: String,
+    #[serde(default)]
+    pub endpoint_id: Option<String>,
     pub endpoint_str: String,
     pub annotation: Option<String>,
     /// Optional for now — an endpoint created without one shows up as
@@ -20,6 +21,8 @@ pub struct CreateEndpointRequest {
 pub struct CreateEndpointResponse {
     pub success: bool,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_id: Option<String>,
 }
 
 pub async fn create_endpoint(
@@ -36,14 +39,56 @@ pub async fn create_endpoint(
                     message: format!(
                         "Invalid method '{m}' — must be one of {VALID_METHODS:?}"
                     ),
+                    endpoint_id: None,
                 }),
             )
         }
         None => None,
     };
 
+    let (eid, was_allocated) = match payload.endpoint_id.as_deref().map(str::trim) {
+        None | Some("") => match state.eid_allocator.allocate() {
+            Ok(allocated) => (allocated, true),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(CreateEndpointResponse {
+                        success: false,
+                        message: format!("Failed to allocate canonical EID: {e:?}"),
+                        endpoint_id: None,
+                    }),
+                );
+            }
+        },
+        Some(custom) => {
+            if !compute::eid::is_valid_eid(custom) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(CreateEndpointResponse {
+                        success: false,
+                        message: format!(
+                            "Invalid endpoint_id format '{custom}' — must follow canonical EID format 'E<number>-<suffix>' (e.g. 'E0001-AAA')"
+                        ),
+                        endpoint_id: None,
+                    }),
+                );
+            }
+            if let Err(e) = state.eid_allocator.reserve(custom) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(CreateEndpointResponse {
+                        success: false,
+                        message: format!("Failed to reserve EID '{custom}': {e:?}"),
+                        endpoint_id: None,
+                    }),
+                );
+            }
+            (custom.to_string(), false)
+        }
+    };
+
     let ep = EndpointDto {
-        endpoint_id: payload.endpoint_id.clone(),
+        endpoint_id: eid.clone(),
         endpoint_str: payload.endpoint_str,
         annotation: payload.annotation,
         method,
@@ -57,13 +102,17 @@ pub async fn create_endpoint(
                 StatusCode::CREATED,
                 Json(CreateEndpointResponse {
                     success: true,
-                    message: format!("Endpoint '{}' created", payload.endpoint_id),
+                    message: format!("Endpoint '{eid}' created"),
+                    endpoint_id: Some(eid),
                 }),
             )
         }
         Err(e) => {
+            if was_allocated {
+                let _ = state.eid_allocator.release(&eid);
+            }
             let message = if db::is_unique_violation(&e) {
-                format!("Endpoint '{}' already exists", payload.endpoint_id)
+                format!("Endpoint '{eid}' already exists")
             } else {
                 format!("Failed to create endpoint: {e:?}")
             };
@@ -72,6 +121,7 @@ pub async fn create_endpoint(
                 Json(CreateEndpointResponse {
                     success: false,
                     message,
+                    endpoint_id: None,
                 }),
             )
         }
@@ -86,6 +136,7 @@ pub async fn delete_endpoint(
 ) -> (StatusCode, Json<CreateEndpointResponse>) {
     match db::delete_endpoint(&state.core, &state.queries, &endpoint_id) {
         Ok(rows) if rows > 0 => {
+            let _ = state.eid_allocator.release(&endpoint_id);
             state.refresh_dashboard_snapshot();
 
             (
@@ -93,6 +144,7 @@ pub async fn delete_endpoint(
                 Json(CreateEndpointResponse {
                     success: true,
                     message: format!("Endpoint '{endpoint_id}' deleted"),
+                    endpoint_id: Some(endpoint_id),
                 }),
             )
         }
@@ -101,6 +153,7 @@ pub async fn delete_endpoint(
             Json(CreateEndpointResponse {
                 success: false,
                 message: format!("Endpoint '{endpoint_id}' not found"),
+                endpoint_id: None,
             }),
         ),
         Err(e) => (
@@ -108,6 +161,7 @@ pub async fn delete_endpoint(
             Json(CreateEndpointResponse {
                 success: false,
                 message: format!("Failed to delete endpoint: {e:?}"),
+                endpoint_id: None,
             }),
         ),
     }

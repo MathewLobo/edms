@@ -79,6 +79,56 @@ impl CollectionMembershipOps {
         })
     }
 
+    /// Lists only the endpoint IDs in this collection.
+    pub fn list_ids(&self) -> EdmsResult<Vec<String>> {
+        let rows = self.list()?;
+        Ok(rows.into_iter().map(|m| m.endpoint_id).collect())
+    }
+
+    /// Returns the endpoint IDs in this collection as a HashSet for fast O(1) lookups.
+    pub fn list_set(&self) -> EdmsResult<std::collections::HashSet<String>> {
+        let ids = self.list_ids()?;
+        Ok(ids.into_iter().collect())
+    }
+
+    /// Adds multiple endpoints to this collection's file in a single transaction.
+    pub fn add_batch(&self, endpoint_ids: &[String]) -> EdmsResult<usize> {
+        if endpoint_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let conn_guard = self
+            .core
+            .base
+            .connection
+            .lock()
+            .map_err(|_| crate::error::EdmsError::SqliteFileLocked)?;
+        let conn = conn_guard
+            .as_ref()
+            .ok_or(crate::error::EdmsError::UnknownError)?;
+
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> EdmsResult<usize> {
+            let mut count = 0;
+            let mut stmt = conn.prepare("INSERT OR IGNORE INTO membership (endpoint_id) VALUES (?)")?;
+            for eid in endpoint_ids {
+                count += stmt.execute([eid])?;
+            }
+            Ok(count)
+        })();
+
+        match result {
+            Ok(count) => {
+                conn.execute_batch("COMMIT")?;
+                Ok(count)
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
     pub fn count(&self) -> EdmsResult<i64> {
         let q = self
             .queries
