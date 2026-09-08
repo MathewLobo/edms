@@ -55,14 +55,37 @@ Treat these as "something changed, go re-fetch," not as the final source of trut
 
 ---
 
+## Views
+
+Static, no-param metadata routes — mostly a place for the frontend to sanity-check which view it's on.
+
+| Method | Path | Type | Notes |
+|---|---|---|---|
+| GET | `/home` | REST | `{"view":"home", ...}` |
+| GET | `/test-view` | REST | `{"view":"test-view", ...}` |
+| GET | `/list-view` | REST | `{"view":"list-view", ...}` |
+
+---
+
+## Endpoints
+
+The only way endpoint definitions currently enter the system — Import (below) extracts files to disk but does not create DB rows yet.
+
+| Method | Path | Body | Notes |
+|---|---|---|---|
+| POST | `/endpoints/create` | `{"endpoint_id","endpoint_str","annotation"?,"method"?}` | `method` optional — one of `GET/POST/PUT/PATCH/DELETE` if given; an endpoint created without one shows as unclassified in the CRUD Operations dashboard breakdown. Rejects a duplicate `endpoint_id` cleanly (400, not a 500) |
+| POST | `/endpoints/:endpoint_id/delete` | — | Does **not** cascade — orphaned bookmarks, collection memberships, and history/request/response data can be left behind (see Known limitations) |
+
+---
+
 ## Test View
 
 | Method | Path | Type | Body / Notes |
 |---|---|---|---|
-| GET | `/test-view` | REST | Static view metadata |
 | GET | `/test-view/endpoints/load` | WS | Sends a snapshot of all endpoints on connect, then streams events |
 | GET | `/test-view/bookmarks/load` | WS | Same, for the `active` bookmark set |
-| GET | `/test-view/run` | WS | Send `{"type":"run_test","payload":{"endpoint_id","method","body","timeout_ms","tick_interval_ms"}}` to start a test. Streams `TestStarted` → `TimerTick`s → `TestFinished`/`TestTimeout` |
+| GET | `/test-view/history/load` | WS | Same, for history — sends `{"type":"snapshot","history":[{"id","endpoint_id","action","details","timestamp"}]}` on connect, then streams events |
+| GET | `/test-view/run` | WS | Send `{"type":"run_test","payload":{"endpoint_id","method","body","timeout_ms","tick_interval_ms","headers"?}}` to start a test. `headers` is an optional `{name: value}` map sent with the request. Streams `TestStarted` → `TimerTick`s → `TestFinished`/`TestTimeout` |
 | POST | `/test-view/stop` | REST | Body `{"endpoint_id","request_number"}` — cancels the app's tracking of an in-flight test (does not kill the underlying HTTP call already running) |
 | POST | `/test-view/save/history` | REST | Body `{"endpoint_id","action","details"}` — manual history entry (History also now auto-records on every completed test, no manual call needed for that case) |
 | POST | `/test-view/save/bookmark` | REST | Body `{"endpoint_id","notes"}` — bookmarks into `active` |
@@ -70,6 +93,7 @@ Treat these as "something changed, go re-fetch," not as the final source of trut
 | GET | `/test-view/:bookmark/delete` | WS | Send `{"endpoint_id"}` — removes from the named folder |
 | GET | `/test-view/:endpoint_id/request/:request_number` | REST | Fetch a saved request body |
 | GET | `/test-view/:endpoint_id/response/:request_number` | REST | Fetch a saved response body |
+| GET | `/test-view/:endpoint_id/headers/:request_number` | REST | Fetch saved headers — body is `{"request_headers":{...},"response_headers":{...}}` |
 | POST | `/test-view/history/clearall` | REST | Wipes all history |
 | POST | `/test-view/bookmark/clearall` | REST | Wipes the `active` bookmark set |
 
@@ -117,6 +141,77 @@ Each collection is its own real file (`storage/collections/{name}.sqlite`), hold
 
 ---
 
+## Data View (folder management)
+
+Manages "folders" under `edms_data`/`edms_root` — a separate, older filesystem-folder concept from Collections above. All fire-and-forget except `active`.
+
+| Method | Path | Type | Notes |
+|---|---|---|---|
+| POST | `/dataview/:folder/delete` | REST | Deletes the folder from disk immediately (not fire-and-forget — this one's synchronous) |
+| POST | `/dataview/:folder/merge` | REST | 202 immediately; spawns an `export_merge` child task, result arrives via `/internal/callback` → `ExportReady` event |
+| GET | `/dataview/:folder/active` | WS | Marks the folder active (in-memory + spawns a child to sync it to disk), broadcasts `FolderBecameActive`, then streams events |
+
+---
+
+## Tags (per-endpoint)
+
+A different table from Collections' tag rollups above — tracks tags directly on an `endpoint_id`.
+
+| Method | Path | Body |
+|---|---|---|
+| GET | `/tags/popular` | — returns `[{"tag","count"}]` |
+| GET | `/tags/:endpoint_id` | — returns `{"tags":[...]}` |
+| POST | `/tags/:endpoint_id/add` | `{"tag"}` |
+| POST | `/tags/:endpoint_id/remove` | `{"tag"}` |
+
+---
+
+## Webview / Repoview
+
+Same catalog pattern as Collections (register a name, list, per-view tag rollups) but **not** as far along — no independent SQLite file per instance yet (`file_path` stays `null`), and no endpoint-membership routes (no `webview/:name/endpoints/add` equivalent exists).
+
+| Method | Path | Body |
+|---|---|---|
+| POST | `/webview/create` | `{"name"}` |
+| GET | `/webview/list` | — |
+| POST | `/webview/tags/create` | `{"name","endpoint_ids"?}` |
+| POST | `/webview/tags/delete` | `{"names"}` |
+| POST | `/webview/tags/rename` | `{"old_name","new_name"}` |
+| GET | `/webview/tags/list` | — |
+| POST | `/repoview/create` | `{"name"}` |
+| GET | `/repoview/list` | — |
+| POST | `/repoview/tags/create` | `{"name","endpoint_ids"?}` |
+| POST | `/repoview/tags/delete` | `{"names"}` |
+| POST | `/repoview/tags/rename` | `{"old_name","new_name"}` |
+| GET | `/repoview/tags/list` | — |
+
+---
+
+## Repo Export / Import
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/repo/:collection/:filename/export` | Returns markdown immediately (built from the endpoints already fetched for the collection); also fires `export_collection` (zip packaging) and `generate_markdown` child tasks in the background — result arrives via `ExportReady` |
+| POST | `/repo/:collection/:filename/import` | 202 immediately; unzips the file at the path `export` writes to (`edms_root/exports/:filename`) back into the path `export` reads its source from (`edms_root/endpoints/reports/:collection`). Result arrives via `/internal/callback` → `ImportReady`. **Only extracts files to disk — does not parse them back into the DB** (no endpoint/bookmark rows are created from an import; that reconciliation isn't built yet) |
+
+---
+
+## Logs
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/logs` | Plain-text tail of `app.log` (last 500 lines) |
+
+---
+
+## Internal — not for frontend use
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/internal/callback` | edms-child → webserver callback channel. Every `ipc::spawn_child` task's result lands here and gets routed to a task-specific handler internally |
+
+---
+
 ## Dashboard
 
 | Method | Path | Notes |
@@ -138,4 +233,7 @@ Each collection is its own real file (`storage/collections/{name}.sqlite`), hold
 - Bookmark actions don't validate that an endpoint exists before bookmarking it (Collections does).
 - No size limits enforced anywhere (Collections count, endpoints-per-list, History/Bookmarks caps).
 - Deleting an endpoint doesn't cascade — orphaned bookmarks, collection memberships, and history/request/response data can be left behind.
-- Only request/response are captured per test — no separate headers file yet.
+- No query-param (QP) concept anywhere — an endpoint's URL is stored as one opaque string. No endpoint to add/count/select individual QPs yet; this is still being designed (see Ravi's 2026-09-07 email).
+- `/collections/:name/endpoints/add` will accept any endpoint that exists centrally — it does not require the endpoint be bookmarked first, even though that's the intended user flow (History → Bookmark → Collection). Don't build a "freely add any endpoint to any collection" UI against it; that gate is expected to land later.
+- Import (`/repo/:collection/:filename/import`) only extracts a zip to disk — it does not create/update endpoint, bookmark, or collection-membership DB rows from the imported files.
+- Webview/Repoview have no independent per-instance SQLite file yet (unlike Collections) and no endpoint-membership routes at all.

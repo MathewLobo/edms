@@ -39,6 +39,7 @@ pub async fn ipc_callback(
         "run_test"                 => handle_run_test(&state, &callback).await,
         "write_request"            => handle_write_request(&state, &callback).await,
         "export_collection"        => handle_export_collection(&state, &callback).await,
+        "import_zip"                => handle_import_zip(&state, &callback).await,
         "generate_markdown"        => handle_generate_markdown(&state, &callback).await,
         "export_merge"             => handle_export_merge(&state, &callback).await,
         "mark_active_folder"       => handle_mark_active_folder(&state, &callback).await,
@@ -98,6 +99,27 @@ async fn handle_run_test(state: &AppState, callback: &IpcCallback) {
             "eid":        endpoint_id,
             "res_index":  request_number,
             "content":    serde_json::to_string(&response_body).unwrap_or_default(),
+        }),
+        3000,
+    );
+
+    // Headers — per Ravi (2026-09-04). compute echoes back the request
+    // headers it actually sent alongside the response's own headers, so
+    // both land in one combined file without webserver needing to
+    // remember what it asked for earlier.
+    let request_headers  = r.get("request_headers").cloned().unwrap_or(serde_json::json!({}));
+    let response_headers = r.get("response_headers").cloned().unwrap_or(serde_json::json!({}));
+    let headers_content = serde_json::json!({
+        "request_headers":  request_headers,
+        "response_headers": response_headers,
+    });
+    crate::ipc::spawn_child(
+        "write_headers",
+        serde_json::json!({
+            "repo_path": state.endpoint_storage_dir(&endpoint_id).display().to_string(),
+            "eid":       endpoint_id,
+            "index":     request_number,
+            "content":   headers_content.to_string(),
         }),
         3000,
     );
@@ -196,6 +218,21 @@ async fn handle_export_collection(state: &AppState, callback: &IpcCallback) {
     );
     let _ = state.events_tx.send(ServerEvent::ExportReady {
         message: "Collection export complete".to_string(),
+    });
+}
+
+// ── import_zip ───────────────────────────────────────────────────────────────
+//
+// edms-child finished unzipping the collection archive to disk. Broadcast
+// so the UI can refresh (e.g. reload the collection's endpoint list).
+
+async fn handle_import_zip(state: &AppState, callback: &IpcCallback) {
+    info!(
+        "[callback] import_zip done: {}",
+        callback.result["message"].as_str().unwrap_or("ok")
+    );
+    let _ = state.events_tx.send(ServerEvent::ImportReady {
+        message: "Collection import complete".to_string(),
     });
 }
 

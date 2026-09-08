@@ -31,12 +31,12 @@ use handlers::{
     dataview::{dashboard, delete_folder, merge_folder, ws_make_folder_active},
     endpoints::{create_endpoint, delete_endpoint},
     logs::get_logs,
-    repo::export_collection,
+    repo::{export_collection, import_collection},
     tags::{add_tag, list_tags_for_endpoint, popular_tags, remove_tag},
     test_view::{
-        clear_bookmarks, clear_history, get_saved_request, get_saved_response, save_bookmark,
-        save_history, stop, ws_add_from_history_to_bookmark, ws_delete_from_bookmark,
-        ws_load_bookmarks, ws_load_endpoints, ws_run,
+        clear_bookmarks, clear_history, get_saved_headers, get_saved_request, get_saved_response,
+        save_bookmark, save_history, stop, ws_add_from_history_to_bookmark,
+        ws_delete_from_bookmark, ws_load_bookmarks, ws_load_endpoints, ws_load_history, ws_run,
     },
     view::{home, list_view, test_view},
     view_catalog::{
@@ -144,6 +144,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/list-view", get(list_view))
         .route("/test-view/endpoints/load", get(ws_load_endpoints))
         .route("/test-view/bookmarks/load", get(ws_load_bookmarks))
+        .route("/test-view/history/load", get(ws_load_history))
         .route("/test-view/run", get(ws_run))
         .route("/test-view/stop", post(stop))
         .route("/test-view/save/history", post(save_history))
@@ -152,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/test-view/:bookmark/delete", get(ws_delete_from_bookmark))
         .route("/test-view/:endpoint_id/request/:request_number", get(get_saved_request))
         .route("/test-view/:endpoint_id/response/:request_number", get(get_saved_response))
+        .route("/test-view/:endpoint_id/headers/:request_number", get(get_saved_headers))
         .route("/test-view/history/clearall", post(clear_history))
         .route("/test-view/bookmark/clearall", post(clear_bookmarks))
         .route("/bookmarks/:collection/create", post(create_collection))
@@ -199,6 +201,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/collections/:name/membership-tags", get(list_collection_tags))
         .route("/collections/by-tag/:tagname", get(collections_by_tag))
         .route("/repo/:collection/:filename/export", get(export_collection))
+        .route("/repo/:collection/:filename/import", post(import_collection))
         .route("/internal/callback", post(ipc_callback))
         .route("/logs", get(get_logs))
         .layer(CorsLayer::permissive())

@@ -2,6 +2,7 @@ use axum::{
     extract::{Path, State},
     http::{header, StatusCode},
     response::IntoResponse,
+    Json,
 };
 use serde_json::json;
 use crate::{db, ipc, state::AppState};
@@ -85,4 +86,43 @@ pub async fn export_collection(
         md,
     )
         .into_response()
+}
+
+/// POST /repo/{collection}/{filename}/import
+///
+/// The compute-side `import_zip` task already existed (zipops::import_zip_impl)
+/// but nothing in the webserver called it — this was the missing wiring.
+/// Mirrors export_collection in reverse, using the same path convention:
+/// unzips the file export_collection writes to (`edms_root/exports/{filename}`)
+/// back into the same path export_collection reads its source from
+/// (`edms_root/endpoints/reports/{collection}`). Fire-and-forget — result
+/// arrives via /internal/callback.
+///
+/// Honest limitation: this only extracts files to disk. It does not parse
+/// the extracted request/response/headers JSON back into the DB (endpoints,
+/// bookmarks, etc.) — that's a separate piece of logic nobody has specified
+/// yet (see Ravi's 2026-09-07 email: IE "depends only on Collections" but
+/// the UI/backend split for it isn't finalized).
+pub async fn import_collection(
+    State(_state): State<AppState>,
+    Path((collection, filename)): Path<(String, String)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    ipc::spawn_child(
+        "import_zip",
+        json!({
+            "zip": format!("edms_root/exports/{filename}"),
+            "destination": format!("edms_root/endpoints/reports/{collection}"),
+        }),
+        3000,
+    );
+
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "ok": true,
+            "status": "import queued",
+            "collection": collection,
+            "filename": filename,
+        })),
+    )
 }

@@ -293,6 +293,33 @@ pub async fn write_response(
     write_response_inner(payload).await
 }
 
+// ── HEADERS DOC ───────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct HeadersDoc {
+    pub repo_path: String,
+    pub eid:       String,
+    pub index:     usize,
+    pub content:   String,
+}
+
+pub async fn write_headers_inner(payload: HeadersDoc) -> Result<String, String> {
+    endpoint_writer::write_headers_file(
+        payload.repo_path,
+        &payload.eid,
+        payload.index,
+        &payload.content,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok("Headers doc written".into())
+}
+
+pub async fn write_headers(
+    Json(payload): Json<HeadersDoc>,
+) -> Result<String, String> {
+    write_headers_inner(payload).await
+}
+
 // ── MARK ACTIVE FOLDER ────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -464,6 +491,11 @@ pub struct RunTestRequest {
     pub request_number: i64,
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
+    /// Headers to send with the request. Echoed back in the result
+    /// alongside the response's own headers, so the caller (webserver)
+    /// can save both together without having to remember what it sent.
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, String>,
 }
 
 fn default_method() -> String {
@@ -474,6 +506,19 @@ fn default_timeout_ms() -> u64 {
     30_000
 }
 
+/// Converts a reqwest HeaderMap into a plain string map for JSON. A header
+/// value that isn't valid UTF-8 is skipped rather than failing the whole
+/// capture — rare in practice, and losing one odd header is better than
+/// losing the test result over it.
+fn headers_to_map(headers: &reqwest::header::HeaderMap) -> std::collections::HashMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value.to_str().ok().map(|v| (name.to_string(), v.to_string()))
+        })
+        .collect()
+}
+
 pub async fn run_test_inner(payload: RunTestRequest) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(payload.timeout_ms))
@@ -481,7 +526,7 @@ pub async fn run_test_inner(payload: RunTestRequest) -> Result<String, String> {
         .map_err(|e| format!("failed to build HTTP client: {e}"))?;
 
     let method = payload.method.to_uppercase();
-    let req = match method.as_str() {
+    let mut req = match method.as_str() {
         "POST" => client.post(&payload.url).json(&payload.body),
         "PUT" => client.put(&payload.url).json(&payload.body),
         "DELETE" => client.delete(&payload.url),
@@ -489,6 +534,9 @@ pub async fn run_test_inner(payload: RunTestRequest) -> Result<String, String> {
         "HEAD" => client.head(&payload.url),
         _ => client.get(&payload.url),
     };
+    for (name, value) in &payload.headers {
+        req = req.header(name, value);
+    }
 
     let start = std::time::Instant::now();
 
@@ -496,6 +544,7 @@ pub async fn run_test_inner(payload: RunTestRequest) -> Result<String, String> {
         Ok(resp) => {
             let elapsed_ms = start.elapsed().as_millis() as i64;
             let status_code = resp.status().as_u16() as i64;
+            let response_headers = headers_to_map(resp.headers());
             let text = resp.text().await.unwrap_or_default();
             // Best-effort parse as JSON; fall back to the raw text as a
             // string value if the endpoint didn't return JSON.
@@ -508,6 +557,8 @@ pub async fn run_test_inner(payload: RunTestRequest) -> Result<String, String> {
                 "status_code": status_code,
                 "response_time_ms": elapsed_ms,
                 "response_body": response_body,
+                "request_headers": payload.headers,
+                "response_headers": response_headers,
                 "timed_out": false,
             })
             .to_string())

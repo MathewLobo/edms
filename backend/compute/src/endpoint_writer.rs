@@ -48,3 +48,23 @@ pub fn write_response_file<P: AsRef<Path>>(
     writer.flush()?;
     Ok(())
 }
+
+/// Per Ravi (2026-09-04): "write logic to capture headers, apply correct
+/// file name and write to the correct EID folder" — the third file per QP
+/// alongside request/response. `content` is expected to already be the
+/// combined {"request_headers":..., "response_headers":...} JSON string —
+/// this function just writes it, same shape as the other two.
+pub fn write_headers_file<P: AsRef<Path>>(
+    repo_path: P,
+    eid: &str,
+    index: usize,
+    content: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(repo_path.as_ref())?;
+    let filename = format!("{}-headers-{}.json", eid, index);
+    let file = File::create(repo_path.as_ref().join(filename))?;
+    let mut writer = BufWriter::new(file);
+    writer.write_all(content.as_bytes())?;
+    writer.flush()?;
+    Ok(())
+}

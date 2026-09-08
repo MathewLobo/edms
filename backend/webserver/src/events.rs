@@ -6,6 +6,7 @@ pub enum ServerEvent {
     // ── Existing events ──────────────────────────────────────────────
     ActiveWorkspaceEndpointsLoaded { count: usize },
     ActiveWorkspaceBookmarksLoaded { count: usize },
+    ActiveWorkspaceHistoryLoaded { count: usize },
     CollectionLoaded { collection: String, moved_to_backup: bool },
     HistoryUpdated { count: usize },
     BookmarksUpdated { count: usize },
@@ -22,6 +23,7 @@ pub enum ServerEvent {
     Error { message: String },
 
     ExportReady { message: String },
+    ImportReady { message: String },
     CrudOperationsUpdated { computed_at: String },
     TimerTick {
         endpoint_id: String,

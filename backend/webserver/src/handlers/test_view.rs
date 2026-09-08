@@ -34,6 +34,18 @@ pub async fn ws_load_bookmarks(ws: WebSocketUpgrade, State(state): State<AppStat
     })
 }
 
+/// GET /test-view/history/load
+///
+/// Was missing entirely — db::list_history() existed but nothing called it,
+/// so there was no way (REST or WS) to actually read history back, only
+/// POST /test-view/save/history to write it. Mirrors ws_load_endpoints /
+/// ws_load_bookmarks: sends an initial snapshot, then streams events.
+pub async fn ws_load_history(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| async move {
+        handle_ws_subscribe_history(socket, state).await;
+    })
+}
+
 pub async fn ws_run(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| async move {
         handle_ws_run(socket, state).await;
@@ -238,6 +250,10 @@ struct RunMessage {
     timeout_ms: u64,
     #[serde(default)]
     tick_interval_ms: u64,
+    /// Headers to send with this request — per Ravi (2026-09-04), the
+    /// third piece to capture alongside request/response.
+    #[serde(default)]
+    headers: std::collections::HashMap<String, String>,
 }
 
 impl RunMessage {
@@ -273,6 +289,7 @@ async fn handle_ws_run(mut socket: WebSocket, state: AppState) {
                                         &run_msg.endpoint_id,
                                         &run_msg.method,
                                         run_msg.body.clone(),
+                                        run_msg.headers.clone(),
                                         run_msg.timer_config(),
                                     )
                                     .await
@@ -306,6 +323,7 @@ async fn run_test_impl(
     endpoint_id: &str,
     method: &str,
     request_json: Value,
+    headers: std::collections::HashMap<String, String>,
     timer_cfg: TimerConfig,
 ) -> Result<(), EdmsError> {
     // 1) Look up endpoint
@@ -396,6 +414,7 @@ async fn run_test_impl(
             "body":           request_json,
             "request_number": request_number,
             "timeout_ms":     timer_cfg.limit_ms,
+            "headers":        headers,
         }),
         3000,
     );
@@ -444,6 +463,30 @@ async fn handle_ws_subscribe_bookmarks(mut socket: WebSocket, state: AppState) {
         let _ = socket.send(Message::Text(resp.to_string())).await;
         let _ = state.events_tx.send(ServerEvent::ActiveWorkspaceBookmarksLoaded {
             count: bks.len(),
+        });
+    }
+
+    let mut rx = state.events_tx.subscribe();
+    while let Ok(evt) = rx.recv().await {
+        let msg = json!({ "type": "event", "event": evt });
+        if socket.send(Message::Text(msg.to_string())).await.is_err() {
+            break;
+        }
+    }
+}
+
+async fn handle_ws_subscribe_history(mut socket: WebSocket, state: AppState) {
+    let history = tokio::task::spawn_blocking({
+        let st = state.clone();
+        move || db::list_history(&st.core, &st.queries)
+    })
+    .await;
+
+    if let Ok(Ok(entries)) = history {
+        let resp = json!({ "type": "snapshot", "history": entries });
+        let _ = socket.send(Message::Text(resp.to_string())).await;
+        let _ = state.events_tx.send(ServerEvent::ActiveWorkspaceHistoryLoaded {
+            count: entries.len(),
         });
     }
 
@@ -603,4 +646,13 @@ pub async fn get_saved_response(
     Path((endpoint_id, request_number)): Path<(String, i64)>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     read_saved_file(&state, &endpoint_id, request_number, "response").await
+}
+
+/// GET /test-view/{endpoint_id}/headers/{request_number}
+/// Body is {"request_headers": {...}, "response_headers": {...}}.
+pub async fn get_saved_headers(
+    State(state): State<AppState>,
+    Path((endpoint_id, request_number)): Path<(String, i64)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    read_saved_file(&state, &endpoint_id, request_number, "headers").await
 }
