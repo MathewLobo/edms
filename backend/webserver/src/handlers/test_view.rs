@@ -575,7 +575,24 @@ async fn handle_ws_subscribe_history(mut socket: WebSocket, state: AppState) {
     }
 }
 
+/// Maps the public-facing "active" alias used in `:bookmark` path params
+/// to the internal ACTIVE_FOLDER constant ("__active__"). Without this,
+/// `/test-view/active/add|delete` silently wrote to/deleted from a
+/// literal folder named "active" — a completely different, nonexistent
+/// row from what save_bookmark/bookmarks/load actually use — so deletes
+/// always matched 0 rows and reported success while doing nothing.
+/// Confirmed 2026-09-08 during end-to-end testing; pre-existing, not
+/// introduced by the bookmark/collection merge work.
+fn resolve_folder_alias(bookmark: &str) -> String {
+    if bookmark == "active" {
+        db::ACTIVE_FOLDER.to_string()
+    } else {
+        bookmark.to_string()
+    }
+}
+
 async fn handle_ws_add_from_history(mut socket: WebSocket, state: AppState, bookmark: String) {
+    let bookmark = resolve_folder_alias(&bookmark);
     while let Some(Ok(msg)) = socket.recv().await {
         let text = match msg {
             Message::Text(t) => t,
@@ -590,7 +607,7 @@ async fn handle_ws_add_from_history(mut socket: WebSocket, state: AppState, book
         // Same gate as save_bookmark, only for the "active" workspace —
         // other named folders are legacy/unused surface this pass doesn't
         // otherwise touch.
-        if bookmark == "active" {
+        if bookmark == db::ACTIVE_FOLDER {
             if let Err((_, body)) = crate::handlers::bookmarks::require_active_collection(&state).await {
                 let _ = socket.send(Message::Text(body.0.to_string())).await;
                 continue;
@@ -630,6 +647,7 @@ async fn handle_ws_add_from_history(mut socket: WebSocket, state: AppState, book
 }
 
 async fn handle_ws_delete_from_bookmark(mut socket: WebSocket, state: AppState, bookmark: String) {
+    let bookmark = resolve_folder_alias(&bookmark);
     while let Some(Ok(msg)) = socket.recv().await {
         let text = match msg {
             Message::Text(t) => t,

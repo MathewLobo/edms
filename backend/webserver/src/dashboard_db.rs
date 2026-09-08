@@ -137,6 +137,18 @@ fn compute_current_stats(
     storage_root: &Path,
 ) -> Result<CurrentStats, Box<dyn std::error::Error + Send + Sync>> {
     let edms_conn = Connection::open(edms_db_path)?;
+    // Match EdmsBase::connect()'s pragmas — without these this ad-hoc
+    // connection was found (2026-09-08) to leave edms.db persistently
+    // locked against every other connection (state.core's shared one
+    // included) after the very first call, on Windows: no busy_timeout
+    // meant zero retry tolerance, and this read connection wasn't
+    // dropped fast enough relative to a concurrent writer to avoid
+    // wedging the file's lock state. Reachable via plain
+    // POST /endpoints/create — pre-existing, not new to this session.
+    edms_conn.execute_batch(
+        "PRAGMA journal_mode = DELETE;
+         PRAGMA busy_timeout = 5000;"
+    )?;
 
     let endpoint_count: i64 =
         edms_conn.query_row("SELECT COUNT(*) FROM endpoints", [], |r| r.get(0))?;

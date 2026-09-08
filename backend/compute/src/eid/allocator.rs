@@ -113,7 +113,17 @@ impl EidAllocator {
 
     fn open_connection(&self) -> Result<Connection, EidError> {
         let conn = Connection::open(&self.db_path)?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        // DELETE, not WAL — matches EdmsBase::connect()'s pragma, the
+        // established working setting for this exact db file everywhere
+        // else in the app. WAL is a *persistent*, file-level setting
+        // (stored in the db header, not per-connection): the first
+        // allocate()/reserve() call was silently flipping the whole
+        // edms.db into WAL mode for every other connection too, which
+        // then reliably deadlocked (confirmed 2026-09-08 — this is the
+        // exact same failure class already hit and fixed once before,
+        // see the Docker/WAL note in API_REFERENCE.md, just reintroduced
+        // here for a different connection).
+        conn.pragma_update(None, "journal_mode", "DELETE")?;
         conn.busy_timeout(std::time::Duration::from_millis(5000))?;
         Ok(conn)
     }
