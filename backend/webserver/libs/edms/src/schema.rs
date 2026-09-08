@@ -265,5 +265,19 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
         [],
     )?;
 
+    // EID allocation tracking table for gap-list allocator
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS eid_allocation (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            watermark INTEGER NOT NULL DEFAULT 0,
+            gaps_json TEXT NOT NULL DEFAULT '[]'
+        )",
+        [],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO eid_allocation (id, watermark, gaps_json) VALUES (1, 0, '[]')",
+        [],
+    )?;
+
     Ok(())
 }

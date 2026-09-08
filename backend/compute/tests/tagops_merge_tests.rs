@@ -639,3 +639,103 @@ fn test_tag_union_no_duplicates() {
     );
     assert!(tags.contains("src-only"), "src-only tag must be unioned");
 }
+
+// ── 22. Multi-DB collection files & physical QP filesystem merge ─────────────
+
+#[test]
+fn test_multidb_collection_files_and_physical_qp_merge() {
+    use compute::eid::is_valid_eid;
+    use edms::ops::collection_membership_ops::CollectionMembershipOps;
+
+    let (dir, path) = setup_db();
+    let root = dir.path();
+    let collections_dir = root.join("storage").join("collections");
+    let eqp_dir = root.join("storage").join("globalEQPData");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::create_dir_all(&eqp_dir).unwrap();
+
+    let conn = raw(&path);
+
+    // EIDs
+    let src_shared_eid = "E0001-AAA";
+    let src_new_eid = "E0002-AAA";
+    let dst_shared_eid = "E0010-AAA";
+
+    // Insert into central endpoints
+    insert_ep(&conn, src_shared_eid, "https://api.example.com/data", Some("GET"));
+    insert_ep(&conn, src_new_eid, "https://api.example.com/netnew", Some("POST"));
+    insert_ep(&conn, dst_shared_eid, "https://api.example.com/data", Some("GET"));
+
+    add_tag(&conn, src_shared_eid, "from-src");
+    add_tag(&conn, dst_shared_eid, "from-dst");
+    add_tag(&conn, src_new_eid, "brand-new");
+
+    drop(conn);
+
+    // Create dedicated collection SQLite files
+    let src_col_file = collections_dir.join("col-src.sqlite");
+    let dst_col_file = collections_dir.join("col-dst.sqlite");
+
+    let src_ops = CollectionMembershipOps::new(src_col_file.to_str().unwrap());
+    src_ops.initialize().unwrap();
+    src_ops.add(src_shared_eid).unwrap();
+    src_ops.add(src_new_eid).unwrap();
+
+    let dst_ops = CollectionMembershipOps::new(dst_col_file.to_str().unwrap());
+    dst_ops.initialize().unwrap();
+    dst_ops.add(dst_shared_eid).unwrap();
+
+    // Setup physical QP files
+    let src_shared_dir = eqp_dir.join(src_shared_eid);
+    let src_new_dir = eqp_dir.join(src_new_eid);
+    let dst_shared_dir = eqp_dir.join(dst_shared_eid);
+    std::fs::create_dir_all(&src_shared_dir).unwrap();
+    std::fs::create_dir_all(&src_new_dir).unwrap();
+    std::fs::create_dir_all(&dst_shared_dir).unwrap();
+
+    // src_shared has request 1
+    std::fs::write(src_shared_dir.join(format!("{src_shared_eid}-request-1.json")), r#"{"req":"src-1"}"#).unwrap();
+    std::fs::write(src_shared_dir.join(format!("{src_shared_eid}-response-1.json")), r#"{"res":"src-1"}"#).unwrap();
+    std::fs::write(src_shared_dir.join(format!("{src_shared_eid}-headers-1.json")), r#"{"head":"src-1"}"#).unwrap();
+
+    // src_new has request 1
+    std::fs::write(src_new_dir.join(format!("{src_new_eid}-request-1.json")), r#"{"req":"new-1"}"#).unwrap();
+
+    // dst_shared already has request 1
+    std::fs::write(dst_shared_dir.join(format!("{dst_shared_eid}-request-1.json")), r#"{"req":"dst-1"}"#).unwrap();
+
+    // Run Merge of col-src into col-dst
+    run_merge(&path, "col-dst", vec![("col-src", vec![])]).unwrap();
+
+    // 1. Assert target collection SQLite file has updated membership
+    let dst_members = dst_ops.list_set().unwrap();
+    assert_eq!(dst_members.len(), 2, "target collection should have 2 members");
+    assert!(dst_members.contains(dst_shared_eid), "matched target EID retained");
+
+    // The second member should be a valid canonical EID (not UUID!)
+    let net_new_eid = dst_members.iter().find(|id| *id != dst_shared_eid).unwrap();
+    assert!(is_valid_eid(net_new_eid), "net-new EID must be canonical format, got: {net_new_eid}");
+
+    // 2. Assert tags unioned on matched endpoint and copied on net-new
+    let conn = raw(&path);
+    let dst_tags = tags_for(&conn, dst_shared_eid);
+    assert!(dst_tags.contains("from-src"), "source tag unioned into matched target");
+    assert!(dst_tags.contains("from-dst"), "existing target tag preserved");
+
+    let new_tags = tags_for(&conn, net_new_eid);
+    assert!(new_tags.contains("brand-new"), "net-new endpoint has source tags");
+
+    // 3. Assert physical QP files merged and re-indexed
+    // Matched endpoint E0010-AAA should now have request-1 AND request-2 (copied from E0001-AAA with index 2)
+    assert!(dst_shared_dir.join(format!("{dst_shared_eid}-request-1.json")).exists());
+    assert!(dst_shared_dir.join(format!("{dst_shared_eid}-request-2.json")).exists(),
+        "source QP file must be copied and re-indexed to request-2");
+    assert!(dst_shared_dir.join(format!("{dst_shared_eid}-response-2.json")).exists());
+    assert!(dst_shared_dir.join(format!("{dst_shared_eid}-headers-2.json")).exists());
+
+    // Net-new endpoint should have its physical QP dir created with request-1
+    let net_new_dir = eqp_dir.join(net_new_eid);
+    assert!(net_new_dir.exists(), "physical QP directory for net-new EID must be created");
+    assert!(net_new_dir.join(format!("{net_new_eid}-request-1.json")).exists(),
+        "QP file for net-new endpoint must be renamed to match new EID");
+}

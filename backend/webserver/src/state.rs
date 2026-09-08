@@ -26,6 +26,7 @@ pub struct AppState {
     /// own independent countdown instead of letting it keep ticking or
     /// fire a second, uncoordinated TestTimeout on its own schedule.
     pub active_timers: Arc<Mutex<HashMap<(String, i32), TimerHandle>>>,
+    pub eid_allocator: Arc<compute::eid::allocator::EidAllocator>,
 }
 
 impl AppState {
@@ -38,6 +39,10 @@ impl AppState {
         config: Arc<AppConfig>,
     ) -> Self {
         let (events_tx, _) = broadcast::channel(256);
+        let eid_allocator = Arc::new(compute::eid::allocator::EidAllocator::new(
+            &db_path.to_string_lossy(),
+        ));
+        let _ = eid_allocator.initialize();
         Self {
             core,
             queries,
@@ -49,6 +54,7 @@ impl AppState {
             started_at: chrono::Utc::now().to_rfc3339(),
             config,
             active_timers: Arc::new(Mutex::new(HashMap::new())),
+            eid_allocator,
         }
     }
 

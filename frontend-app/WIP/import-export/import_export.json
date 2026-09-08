@@ -1,0 +1,42 @@
+[
+    {
+        "name": "autheqp.zip",
+        "type": "Import",
+        "view": "compressed",
+        "purpose": "Collections",
+        "size": "120 MB",
+        "formatCheck": "success"
+    },
+    {
+        "name": "inventory.zip",
+        "type": "Export",
+        "view": "compressed",
+        "purpose": "RepoView",
+        "size": "250 MB",
+        "formatCheck": "success"
+    },
+    {
+        "name": "vehicle-data.zip",
+        "type": "Import",
+        "view": "compressed",
+        "purpose": "WebView",
+        "size": "80 MB",
+        "formatCheck": "fail"
+    },
+    {
+        "name": "telemetry",
+        "type": "Import",
+        "view": "uncompressed",
+        "purpose": "Collections",
+        "size": "190 MB",
+        "formatCheck": "success"
+    },
+    {
+        "name": "adas-services",
+        "type": "Export",
+        "view": "uncompressed",
+        "purpose": "WebView",
+        "size": "150 MB",
+        "formatCheck": "success"
+    }
+]
