@@ -62,17 +62,25 @@ pub fn spawn_child(task: &str, payload: serde_json::Value, callback_port: u16) {
         task, callback_port
     );
 
-    let child_bin = if std::path::Path::new("./target/release/edms-child").exists() {
-        "./target/release/edms-child"
-    } else if std::path::Path::new("./target/debug/edms-child").exists() {
-        "./target/debug/edms-child"
-    } else if std::path::Path::new("../compute/target/release/edms-child").exists() {
-        "../compute/target/release/edms-child"
-    } else {
-        "../compute/target/debug/edms-child"
-    };
+    // Windows binaries need the .exe suffix to actually match on disk —
+    // Path::exists() does not auto-resolve it the way CreateProcess does,
+    // so without this every check below silently failed on Windows and
+    // this always fell through to the last (debug) branch regardless of
+    // which one was actually newest, silently running a stale binary.
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let candidates = [
+        format!("./target/release/edms-child{suffix}"),
+        format!("./target/debug/edms-child{suffix}"),
+        format!("../compute/target/release/edms-child{suffix}"),
+        format!("../compute/target/debug/edms-child{suffix}"),
+    ];
+    let child_bin = candidates
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .cloned()
+        .unwrap_or_else(|| candidates.last().unwrap().clone());
 
-    let spawn_result = Command::new(child_bin)
+    let spawn_result = Command::new(&child_bin)
         .stdin(Stdio::piped())
         .stdout(Stdio::null()) // detached — we don't read stdout
         .stderr(Stdio::inherit()) // keep stderr so child logs are visible
