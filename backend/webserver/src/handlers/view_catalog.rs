@@ -30,7 +30,7 @@ pub struct EndpointIdRequest {
     pub endpoint_id: String,
 }
 
-fn open_catalog(state: &AppState) -> Result<ViewCatalogOps, String> {
+pub(crate) fn open_catalog(state: &AppState) -> Result<ViewCatalogOps, String> {
     let ops = ViewCatalogOps::new(&state.db_path.display().to_string());
     ops.initialize().map_err(|e| format!("{e:?}"))?;
     Ok(ops)
@@ -39,7 +39,7 @@ fn open_catalog(state: &AppState) -> Result<ViewCatalogOps, String> {
 /// Where a collection's own file lives on disk — matches the Sept-1 schema
 /// path, and the directory is guaranteed to already exist by the folder
 /// init work (`storage/collections`) that runs on every launch.
-fn collection_file_path(state: &AppState, name: &str) -> String {
+pub(crate) fn collection_file_path(state: &AppState, name: &str) -> String {
     state
         .storage_root
         .join("storage")
@@ -49,10 +49,28 @@ fn collection_file_path(state: &AppState, name: &str) -> String {
         .to_string()
 }
 
-fn open_membership(file_path: &str) -> Result<CollectionMembershipOps, String> {
+pub(crate) fn open_membership(file_path: &str) -> Result<CollectionMembershipOps, String> {
     let ops = CollectionMembershipOps::new(file_path);
     ops.initialize().map_err(|e| format!("{e:?}"))?;
     Ok(ops)
+}
+
+/// Looks up an existing collection by name in the catalog and opens its
+/// membership file. Shared by every handler that operates on a specific,
+/// already-created collection (add/remove/list here, and load/save/unsave
+/// in bookmarks.rs) — one place that defines "does this collection exist
+/// and where's its file."
+pub(crate) fn open_existing_collection_membership(
+    state: &AppState,
+    name: &str,
+) -> Result<CollectionMembershipOps, String> {
+    let catalog = open_catalog(state)?;
+    let row = catalog
+        .get(ViewKind::Collections, name)
+        .map_err(|e| format!("{e:?}"))?
+        .ok_or_else(|| format!("Collection '{name}' does not exist"))?;
+    let path = row.1.ok_or_else(|| format!("Collection '{name}' has no file yet"))?;
+    open_membership(&path)
 }
 
 async fn register_for(
@@ -308,51 +326,15 @@ pub async fn delete_collection_entry(
     }
 }
 
-/// POST /collections/:name/endpoints/add — adds an endpoint to this
-/// collection's own file. Rejects endpoint IDs that don't exist in the
-/// central endpoints table — a collection is a membership list over real
-/// data, never a place to reference something that doesn't exist.
-pub async fn add_endpoint_to_collection(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Json(payload): Json<EndpointIdRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let res = tokio::task::spawn_blocking({
-        let state = state.clone();
-        let name = name.clone();
-        let endpoint_id = payload.endpoint_id.clone();
-        move || -> Result<usize, String> {
-            let exists = db::get_endpoint(&state.core, &state.queries, &endpoint_id)
-                .map_err(|e| format!("{e:?}"))?
-                .is_some();
-            if !exists {
-                return Err(format!("Endpoint '{endpoint_id}' does not exist"));
-            }
-
-            let catalog = open_catalog(&state)?;
-            let row = catalog
-                .get(ViewKind::Collections, &name)
-                .map_err(|e| format!("{e:?}"))?
-                .ok_or_else(|| format!("Collection '{name}' does not exist"))?;
-            let path = row.1.ok_or_else(|| format!("Collection '{name}' has no file yet"))?;
-
-            let membership = open_membership(&path)?;
-            membership.add(&endpoint_id).map_err(|e| format!("{e:?}"))
-        }
-    })
-    .await;
-
-    match res {
-        Ok(Ok(inserted)) => (StatusCode::OK, Json(json!({ "ok": true, "inserted": inserted }))),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "ok": false, "error": e.to_string() })),
-        ),
-    }
-}
-
 /// POST /collections/:name/endpoints/remove
+///
+/// Direct removal stays available (removal doesn't carry the same "must be
+/// deliberately curated via testing" risk as addition — see the merged
+/// bookmark/collection design, Mathew 2026-09-08). Addition, by contrast,
+/// no longer has a direct route here: the only way an endpoint enters a
+/// collection now is bookmarks.rs's save-to-collection action, which
+/// requires it to already be a bookmarked member of the loaded collection's
+/// active workspace first.
 pub async fn remove_endpoint_from_collection(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -363,14 +345,7 @@ pub async fn remove_endpoint_from_collection(
         let name = name.clone();
         let endpoint_id = payload.endpoint_id.clone();
         move || -> Result<usize, String> {
-            let catalog = open_catalog(&state)?;
-            let row = catalog
-                .get(ViewKind::Collections, &name)
-                .map_err(|e| format!("{e:?}"))?
-                .ok_or_else(|| format!("Collection '{name}' does not exist"))?;
-            let path = row.1.ok_or_else(|| format!("Collection '{name}' has no file yet"))?;
-
-            let membership = open_membership(&path)?;
+            let membership = open_existing_collection_membership(&state, &name)?;
             membership.remove(&endpoint_id).map_err(|e| format!("{e:?}"))
         }
     })
@@ -395,14 +370,7 @@ pub async fn list_collection_endpoints(
         let state = state.clone();
         let name = name.clone();
         move || -> Result<Vec<(String, String)>, String> {
-            let catalog = open_catalog(&state)?;
-            let row = catalog
-                .get(ViewKind::Collections, &name)
-                .map_err(|e| format!("{e:?}"))?
-                .ok_or_else(|| format!("Collection '{name}' does not exist"))?;
-            let path = row.1.ok_or_else(|| format!("Collection '{name}' has no file yet"))?;
-
-            let membership = open_membership(&path)?;
+            let membership = open_existing_collection_membership(&state, &name)?;
             let entries = membership.list().map_err(|e| format!("{e:?}"))?;
             Ok(entries.into_iter().map(|e| (e.endpoint_id, e.added_at)).collect())
         }

@@ -25,65 +25,82 @@ pub struct CreateEndpointResponse {
     pub endpoint_id: Option<String>,
 }
 
+/// Validates a caller-supplied method string, if any, against the allowed
+/// set. `None` in, `None` out — method stays optional at the DB layer.
+fn validate_method(method: Option<&str>) -> Result<Option<String>, String> {
+    match method.map(str::to_uppercase) {
+        Some(m) if VALID_METHODS.contains(&m.as_str()) => Ok(Some(m)),
+        Some(m) => Err(format!(
+            "Invalid method '{m}' — must be one of {VALID_METHODS:?}"
+        )),
+        None => Ok(None),
+    }
+}
+
+/// Resolves a caller-supplied (optional) endpoint_id into a concrete
+/// canonical EID — allocates a fresh one if none was given, or validates +
+/// reserves the given one. Doesn't touch the `endpoints` table itself;
+/// callers decide what to do once they have an ID. Returns
+/// `(eid, was_freshly_allocated)` — the bool tells the caller whether to
+/// release it back to the allocator's gap list on a later failure.
+fn resolve_new_eid(state: &AppState, endpoint_id: Option<&str>) -> Result<(String, bool), (StatusCode, String)> {
+    match endpoint_id.map(str::trim) {
+        None | Some("") => match state.eid_allocator.allocate() {
+            Ok(allocated) => Ok((allocated, true)),
+            Err(e) => Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to allocate canonical EID: {e:?}"),
+            )),
+        },
+        Some(custom) => {
+            if !compute::eid::is_valid_eid(custom) {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "Invalid endpoint_id format '{custom}' — must follow canonical EID format 'E<number>-<suffix>' (e.g. 'E0001-AAA')"
+                    ),
+                ));
+            }
+            if let Err(e) = state.eid_allocator.reserve(custom) {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to reserve EID '{custom}': {e:?}"),
+                ));
+            }
+            Ok((custom.to_string(), false))
+        }
+    }
+}
+
 pub async fn create_endpoint(
     State(state): State<AppState>,
     Json(payload): Json<CreateEndpointRequest>,
 ) -> (StatusCode, Json<CreateEndpointResponse>) {
-    let method = match payload.method.as_deref().map(str::to_uppercase) {
-        Some(m) if VALID_METHODS.contains(&m.as_str()) => Some(m),
-        Some(m) => {
+    let method = match validate_method(payload.method.as_deref()) {
+        Ok(m) => m,
+        Err(message) => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(CreateEndpointResponse {
                     success: false,
-                    message: format!(
-                        "Invalid method '{m}' — must be one of {VALID_METHODS:?}"
-                    ),
+                    message,
                     endpoint_id: None,
                 }),
             )
         }
-        None => None,
     };
 
-    let (eid, was_allocated) = match payload.endpoint_id.as_deref().map(str::trim) {
-        None | Some("") => match state.eid_allocator.allocate() {
-            Ok(allocated) => (allocated, true),
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(CreateEndpointResponse {
-                        success: false,
-                        message: format!("Failed to allocate canonical EID: {e:?}"),
-                        endpoint_id: None,
-                    }),
-                );
-            }
-        },
-        Some(custom) => {
-            if !compute::eid::is_valid_eid(custom) {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(CreateEndpointResponse {
-                        success: false,
-                        message: format!(
-                            "Invalid endpoint_id format '{custom}' — must follow canonical EID format 'E<number>-<suffix>' (e.g. 'E0001-AAA')"
-                        ),
-                        endpoint_id: None,
-                    }),
-                );
-            }
-            if let Err(e) = state.eid_allocator.reserve(custom) {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(CreateEndpointResponse {
-                        success: false,
-                        message: format!("Failed to reserve EID '{custom}': {e:?}"),
-                        endpoint_id: None,
-                    }),
-                );
-            }
-            (custom.to_string(), false)
+    let (eid, was_allocated) = match resolve_new_eid(&state, payload.endpoint_id.as_deref()) {
+        Ok(pair) => pair,
+        Err((status, message)) => {
+            return (
+                status,
+                Json(CreateEndpointResponse {
+                    success: false,
+                    message,
+                    endpoint_id: None,
+                }),
+            )
         }
     };
 
@@ -124,6 +141,58 @@ pub async fn create_endpoint(
                     endpoint_id: None,
                 }),
             )
+        }
+    }
+}
+
+/// Used by Test View's run-test flow — per Mathew (2026-09-08), an
+/// endpoint is only created the moment it's actually tested, not via a
+/// separate manual step. Unlike `create_endpoint` (an explicit
+/// create-only action that correctly rejects a duplicate ID), this is a
+/// true get-or-create: re-testing an endpoint that already exists by ID
+/// is the expected common case, not an error.
+///
+/// Not wrapped in spawn_blocking, matching create_endpoint's existing
+/// convention above — callers running on the async runtime should wrap
+/// this themselves if that becomes a problem in practice.
+pub async fn get_or_create_endpoint(
+    state: &AppState,
+    endpoint_id: Option<&str>,
+    endpoint_str: &str,
+    method: Option<String>,
+    annotation: Option<String>,
+) -> Result<(EndpointDto, bool), (StatusCode, String)> {
+    if let Some(id) = endpoint_id.map(str::trim).filter(|s| !s.is_empty()) {
+        match db::get_endpoint(&state.core, &state.queries, id) {
+            Ok(Some(existing)) => return Ok((existing, false)),
+            Ok(None) => {} // doesn't exist yet — fall through and create it with this exact id
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to look up endpoint '{id}': {e:?}"),
+                ))
+            }
+        }
+    }
+
+    let (eid, was_allocated) = resolve_new_eid(state, endpoint_id)?;
+    let ep = EndpointDto {
+        endpoint_id: eid.clone(),
+        endpoint_str: endpoint_str.to_string(),
+        annotation,
+        method,
+    };
+
+    match db::insert_endpoint(&state.core, &state.queries, &ep) {
+        Ok(_) => Ok((ep, true)),
+        Err(e) => {
+            if was_allocated {
+                let _ = state.eid_allocator.release(&eid);
+            }
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to create endpoint '{eid}': {e:?}"),
+            ))
         }
     }
 }

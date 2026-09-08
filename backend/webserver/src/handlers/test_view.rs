@@ -130,6 +130,13 @@ pub async fn save_bookmark(
     State(state): State<AppState>,
     Json(payload): Json<Value>,
 ) -> (StatusCode, Json<serde_json::Value>) {
+    // Per Mathew (2026-09-08): bookmarking requires a collection to
+    // already be loaded — "active" is the draft state of whichever
+    // collection that is, not a free-floating staging area.
+    if let Err((status, body)) = crate::handlers::bookmarks::require_active_collection(&state).await {
+        return (status, body);
+    }
+
     let endpoint_id = payload["endpoint_id"].as_str().unwrap_or("").to_string();
     let notes = payload.get("notes").and_then(|v| v.as_str()).map(|s| s.to_string());
 
@@ -242,7 +249,17 @@ struct RunWrapper {
 
 #[derive(Debug, Deserialize)]
 struct RunMessage {
-    endpoint_id: String,
+    /// Optional — per Mathew (2026-09-08), an endpoint is only created
+    /// the moment it's tested, not via a separate manual step. Omit this
+    /// to have a fresh canonical EID auto-allocated; pass an existing
+    /// one to re-test it (the common case); pass a not-yet-existing one
+    /// to create it with that exact id.
+    #[serde(default)]
+    endpoint_id: Option<String>,
+    /// The URL to test. Required even when re-testing an existing
+    /// endpoint_id — used only to create the row when it doesn't exist
+    /// yet; ignored (the stored endpoint_str wins) when it does.
+    endpoint_str: String,
     method: String,
     #[serde(default, alias = "request_json")]
     body: Value,
@@ -254,6 +271,10 @@ struct RunMessage {
     /// third piece to capture alongside request/response.
     #[serde(default)]
     headers: std::collections::HashMap<String, String>,
+    /// Annotation to save if this run ends up creating a brand-new
+    /// endpoint. Ignored when re-testing an existing one.
+    #[serde(default)]
+    annotation: Option<String>,
 }
 
 impl RunMessage {
@@ -284,13 +305,16 @@ async fn handle_ws_run(mut socket: WebSocket, state: AppState) {
                                 let run_msg = wrapper.payload;
                                 let st = state.clone();
                                 tokio::spawn(async move {
+                                    let timer_cfg = run_msg.timer_config();
                                     if let Err(e) = run_test_impl(
                                         &st,
-                                        &run_msg.endpoint_id,
+                                        run_msg.endpoint_id.as_deref(),
+                                        &run_msg.endpoint_str,
                                         &run_msg.method,
                                         run_msg.body.clone(),
                                         run_msg.headers.clone(),
-                                        run_msg.timer_config(),
+                                        run_msg.annotation.clone(),
+                                        timer_cfg,
                                     )
                                     .await
                                     {
@@ -320,22 +344,34 @@ async fn handle_ws_run(mut socket: WebSocket, state: AppState) {
 
 async fn run_test_impl(
     state: &AppState,
-    endpoint_id: &str,
+    endpoint_id: Option<&str>,
+    endpoint_str: &str,
     method: &str,
     request_json: Value,
     headers: std::collections::HashMap<String, String>,
+    annotation: Option<String>,
     timer_cfg: TimerConfig,
 ) -> Result<(), EdmsError> {
-    // 1) Look up endpoint
-    let endpoint = tokio::task::spawn_blocking({
-        let st = state.clone();
-        let id = endpoint_id.to_string();
-        move || db::get_endpoint(&st.core, &st.queries, &id)
-    })
+    // 1) Get-or-create the endpoint — per Mathew (2026-09-08), an endpoint
+    //    is only created the moment it's actually tested. Re-testing an
+    //    existing endpoint_id is the common case (returned as-is); a new
+    //    or omitted id creates a fresh row here.
+    let (endpoint, was_created) = crate::handlers::endpoints::get_or_create_endpoint(
+        state,
+        endpoint_id,
+        endpoint_str,
+        Some(method.to_uppercase()),
+        annotation,
+    )
     .await
-    .map_err(|_| EdmsError::UnknownError)?
-    .map_err(|_| EdmsError::UnknownError)?
-    .ok_or(EdmsError::UnknownError)?;
+    .map_err(|(_, msg)| {
+        tracing::warn!("[run_test_impl] get_or_create_endpoint failed: {msg}");
+        EdmsError::UnknownError
+    })?;
+    let endpoint_id = endpoint.endpoint_id.clone();
+    if was_created {
+        state.refresh_dashboard_snapshot();
+    }
 
     // 2) Allocate request number
     let request_number = tokio::task::spawn_blocking({
@@ -353,7 +389,7 @@ async fn run_test_impl(
     // actually produces (compute::endpoint_writer) — these two were out of
     // sync before, meaning the file this points at didn't exist.
     let request_file = state
-        .endpoint_storage_dir(endpoint_id)
+        .endpoint_storage_dir(&endpoint_id)
         .join(format!("{endpoint_id}-request-{request_number}.json"))
         .display()
         .to_string();
@@ -374,7 +410,7 @@ async fn run_test_impl(
     ipc::spawn_child(
         "write_request",
         json!({
-            "repo_path":  state.endpoint_storage_dir(endpoint_id).display().to_string(),
+            "repo_path":  state.endpoint_storage_dir(&endpoint_id).display().to_string(),
             "eid":        endpoint_id,
             "req_index":  request_number,
             "content":    serde_json::to_string(&request_json).unwrap_or_default(),
@@ -449,21 +485,61 @@ async fn handle_ws_subscribe_endpoints(mut socket: WebSocket, state: AppState) {
 }
 
 async fn handle_ws_subscribe_bookmarks(mut socket: WebSocket, state: AppState) {
+    let active_collection = state.active_collection.read().await.clone();
+
+    // Per Mathew (2026-09-08): loading a collection copies/resolves full
+    // endpoint data into bookmark view, not just EIDs — endpoints_for_ids
+    // already does that join. What's new here is also marking, per
+    // endpoint, whether it's currently a *saved member* of the loaded
+    // collection (vs. just bookmarked-but-not-yet-saved) — computed by
+    // cross-referencing against the collection's own membership set, never
+    // stored redundantly in the bookmarks table itself.
     let bookmarks = tokio::task::spawn_blocking({
         let st = state.clone();
+        let active_collection = active_collection.clone();
         move || {
             let ids = db::list_bookmarked_endpoints_active(&st.core, &st.queries)?;
-            db::endpoints_for_ids(&st.core, &st.queries, &ids)
+            let endpoints = db::endpoints_for_ids(&st.core, &st.queries, &ids)?;
+
+            let member_set = match &active_collection {
+                Some(name) => {
+                    match crate::handlers::view_catalog::open_existing_collection_membership(&st, name)
+                        .and_then(|m| m.list_set().map_err(|e| format!("{e:?}")))
+                    {
+                        Ok(set) => set,
+                        Err(_) => std::collections::HashSet::new(),
+                    }
+                }
+                None => std::collections::HashSet::new(),
+            };
+
+            Ok::<_, EdmsError>((endpoints, member_set))
         }
     })
     .await;
 
-    if let Ok(Ok(bks)) = bookmarks {
-        let resp = json!({ "type": "snapshot", "bookmarks": bks });
-        let _ = socket.send(Message::Text(resp.to_string())).await;
-        let _ = state.events_tx.send(ServerEvent::ActiveWorkspaceBookmarksLoaded {
-            count: bks.len(),
+    if let Ok(Ok((bks, member_set))) = bookmarks {
+        let enriched: Vec<Value> = bks
+            .iter()
+            .map(|ep| {
+                let mut v = serde_json::to_value(ep).unwrap_or(Value::Null);
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert(
+                        "in_collection".to_string(),
+                        Value::Bool(member_set.contains(&ep.endpoint_id)),
+                    );
+                }
+                v
+            })
+            .collect();
+        let count = enriched.len();
+        let resp = json!({
+            "type": "snapshot",
+            "active_collection": active_collection,
+            "bookmarks": enriched
         });
+        let _ = socket.send(Message::Text(resp.to_string())).await;
+        let _ = state.events_tx.send(ServerEvent::ActiveWorkspaceBookmarksLoaded { count });
     }
 
     let mut rx = state.events_tx.subscribe();
@@ -510,6 +586,16 @@ async fn handle_ws_add_from_history(mut socket: WebSocket, state: AppState, book
             Ok(v) => v["endpoint_id"].as_str().unwrap_or("").to_string(),
             Err(_) => text.trim().to_string(),
         };
+
+        // Same gate as save_bookmark, only for the "active" workspace —
+        // other named folders are legacy/unused surface this pass doesn't
+        // otherwise touch.
+        if bookmark == "active" {
+            if let Err((_, body)) = crate::handlers::bookmarks::require_active_collection(&state).await {
+                let _ = socket.send(Message::Text(body.0.to_string())).await;
+                continue;
+            }
+        }
 
         let res = tokio::task::spawn_blocking({
             let st = state.clone();

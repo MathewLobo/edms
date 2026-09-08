@@ -15,6 +15,12 @@ pub struct AppState {
     pub queries: Arc<QueryMap>,
     pub events_tx: broadcast::Sender<ServerEvent>,
     pub active_folder: Arc<RwLock<Option<String>>>,
+    /// Which real Collection (System 2, `storage/collections/{name}.sqlite`)
+    /// is currently loaded into the active bookmark workspace, if any.
+    /// Per Mathew (2026-09-08): bookmarking requires a collection to be
+    /// loaded first — this is what that check reads, and what "save this
+    /// bookmarked endpoint into the collection" writes into.
+    pub active_collection: Arc<RwLock<Option<String>>>,
     pub dashboard_conn: Arc<Mutex<Connection>>,
     pub db_path: PathBuf,
     pub storage_root: PathBuf,
@@ -48,6 +54,7 @@ impl AppState {
             queries,
             events_tx,
             active_folder: Arc::new(RwLock::new(None)),
+            active_collection: Arc::new(RwLock::new(None)),
             dashboard_conn: Arc::new(Mutex::new(dashboard_conn)),
             db_path,
             storage_root,
