@@ -22,7 +22,7 @@ use edms::schema::initialize_schema_from_core;
 use std::{net::SocketAddr, sync::Arc};
 
 use handlers::{
-    bookmarks::{create_collection, ws_load_collection},
+    bookmarks::{remove_from_collection, save_to_collection, ws_load_collection},
     callback::ipc_callback,
     dashboard::{
         compare_daily_snapshots, get_crud_operations, get_dashboard_snapshot,
@@ -40,7 +40,7 @@ use handlers::{
     },
     view::{home, list_view, test_view},
     view_catalog::{
-        add_endpoint_to_collection, create_collection_entry, create_repoview_entry,
+        create_collection_entry, create_repoview_entry,
         create_webview_entry, delete_collection_entry, get_collection_entry,
         list_collection_endpoints, list_collections, list_repoviews, list_webviews,
         remove_endpoint_from_collection, rename_collection_entry,
@@ -156,8 +156,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/test-view/:endpoint_id/headers/:request_number", get(get_saved_headers))
         .route("/test-view/history/clearall", post(clear_history))
         .route("/test-view/bookmark/clearall", post(clear_bookmarks))
-        .route("/bookmarks/:collection/create", post(create_collection))
         .route("/bookmarks/:collection/load", get(ws_load_collection))
+        .route("/bookmarks/active/:endpoint_id/save", post(save_to_collection))
+        .route("/bookmarks/active/:endpoint_id/unsave", post(remove_from_collection))
         .route("/dataview/:folder/delete", post(delete_folder))
         .route("/dataview/:folder/merge", post(merge_folder))
         .route("/dataview/:folder/active", get(ws_make_folder_active))
@@ -173,7 +174,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/collections/:name", get(get_collection_entry))
         .route("/collections/:name/rename", post(rename_collection_entry))
         .route("/collections/:name/delete", post(delete_collection_entry))
-        .route("/collections/:name/endpoints/add", post(add_endpoint_to_collection))
         .route("/collections/:name/endpoints/remove", post(remove_endpoint_from_collection))
         .route("/collections/:name/endpoints", get(list_collection_endpoints))
         .route("/collections/tags/create", post(create_collections_tag))

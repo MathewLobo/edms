@@ -85,40 +85,44 @@ The only way endpoint definitions currently enter the system — Import (below) 
 | GET | `/test-view/endpoints/load` | WS | Sends a snapshot of all endpoints on connect, then streams events |
 | GET | `/test-view/bookmarks/load` | WS | Same, for the `active` bookmark set |
 | GET | `/test-view/history/load` | WS | Same, for history — sends `{"type":"snapshot","history":[{"id","endpoint_id","action","details","timestamp"}]}` on connect, then streams events |
-| GET | `/test-view/run` | WS | Send `{"type":"run_test","payload":{"endpoint_id","method","body","timeout_ms","tick_interval_ms","headers"?}}` to start a test. `headers` is an optional `{name: value}` map sent with the request. Streams `TestStarted` → `TimerTick`s → `TestFinished`/`TestTimeout` |
+| GET | `/test-view/run` | WS | Send `{"type":"run_test","payload":{"endpoint_id"?,"endpoint_str","method","body","timeout_ms","tick_interval_ms","headers"?,"annotation"?}}` to start a test. **`endpoint_id` is optional as of 2026-09-08** — an endpoint is only created the moment it's tested: omit it to auto-allocate a fresh canonical EID, pass an existing one to re-test it (the common case), or a not-yet-existing one to create it with that exact id. `endpoint_str` is always required (used to create the row if it doesn't exist yet; ignored — the stored value wins — if it does). `annotation` is used only when this run creates a new endpoint. Streams `TestStarted` → `TimerTick`s → `TestFinished`/`TestTimeout` |
 | POST | `/test-view/stop` | REST | Body `{"endpoint_id","request_number"}` — cancels the app's tracking of an in-flight test (does not kill the underlying HTTP call already running) |
 | POST | `/test-view/save/history` | REST | Body `{"endpoint_id","action","details"}` — manual history entry (History also now auto-records on every completed test, no manual call needed for that case) |
-| POST | `/test-view/save/bookmark` | REST | Body `{"endpoint_id","notes"}` — bookmarks into `active` |
-| GET | `/test-view/:bookmark/add` | WS | Send `{"endpoint_id"}` — adds to the named folder (not just `active`) |
-| GET | `/test-view/:bookmark/delete` | WS | Send `{"endpoint_id"}` — removes from the named folder |
+| POST | `/test-view/save/bookmark` | REST | Body `{"endpoint_id","notes"}` — bookmarks into `active`. **Requires a collection to be loaded first** (`/bookmarks/:collection/load`) as of 2026-09-08 — 400 `{"error":"no_collection_loaded","message":"Load a collection first"}` otherwise |
+| GET | `/test-view/:bookmark/add` | WS | Send `{"endpoint_id"}` — adds to the named folder. Same "must have a collection loaded" gate as above when `:bookmark` is `active` |
+| GET | `/test-view/:bookmark/delete` | WS | Send `{"endpoint_id"}` — removes from the named folder entirely (ungated — clearing your own workspace never requires a loaded collection). For `active`, this is "delete from bookmark view"; it does not touch collection membership |
 | GET | `/test-view/:endpoint_id/request/:request_number` | REST | Fetch a saved request body |
 | GET | `/test-view/:endpoint_id/response/:request_number` | REST | Fetch a saved response body |
 | GET | `/test-view/:endpoint_id/headers/:request_number` | REST | Fetch saved headers — body is `{"request_headers":{...},"response_headers":{...}}` |
 | POST | `/test-view/history/clearall` | REST | Wipes all history |
 | POST | `/test-view/bookmark/clearall` | REST | Wipes the `active` bookmark set |
 
-**Bookmarks (System 1 — old, still used by Test View):**
+**Bookmarks ↔ Collections (merged as of 2026-09-08 — System 1 is retired):**
+
+"Active bookmarks" is now always the draft state of whichever real Collection is currently loaded — there's no more free-floating or arbitrarily-named bookmark-folder-as-collection. Flow: create an empty collection (Collections table below) → load it here → bookmark tested endpoints into `active` (Test View section above) → per-endpoint, save into or unsave from the loaded collection.
 
 | Method | Path | Type | Notes |
 |---|---|---|---|
-| POST | `/bookmarks/:collection/create` | REST | Copies `active` into the named folder |
-| GET | `/bookmarks/:collection/load` | WS | Loads a named folder into `active` (backs up the previous `active` first), then streams events |
+| GET | `/bookmarks/:collection/load` | WS | Loads a collection's members into `active`, **resolving full endpoint data, not just EIDs** (backs up whatever was in `active` first, into the single rolling `__session_backup__` slot — see Known limitations). Sets this as the loaded collection for every gated action below. Then streams events |
+| POST | `/bookmarks/active/:endpoint_id/save` | REST | Persists a bookmarked endpoint's membership (EID + timestamp only) into the loaded collection. 400 if nothing's loaded, or if `:endpoint_id` isn't currently bookmarked in `active` |
+| POST | `/bookmarks/active/:endpoint_id/unsave` | REST | Drops that endpoint's membership from the loaded collection — **stays bookmarked/visible in `active`** afterward, only the collection membership is removed. 400 if nothing's loaded |
+
+`GET /test-view/bookmarks/load`'s snapshot now also carries `"active_collection": <name or null>` and, per bookmark entry, `"in_collection": true/false` (computed by cross-referencing the loaded collection's membership set — never stored redundantly).
 
 ---
 
-## Collections (System 2 — new, per-collection files)
+## Collections (per-collection files)
 
-Each collection is its own real file (`storage/collections/{name}.sqlite`), holding just `endpoint_id` + `added_at`. The endpoint's actual data always stays in the central `endpoints` table — Collections never copies it.
+Each collection is its own real file (`storage/collections/{name}.sqlite`), holding just `endpoint_id` + `added_at`. The endpoint's actual data always stays in the central `endpoints` table — Collections never copies it. **A collection is always created empty** — the only way an endpoint becomes a member is the bookmark flow above (`/bookmarks/active/:endpoint_id/save`); there is no longer a direct "add any endpoint to any collection" route.
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
-| POST | `/collections/create` | `{"name"}` | Creates the catalog row + the real file |
+| POST | `/collections/create` | `{"name"}` | Creates the catalog row + the real file, empty |
 | GET | `/collections/list` | — | All collections |
 | GET | `/collections/:name` | — | One collection's catalog row; 404 if missing |
 | POST | `/collections/:name/rename` | `{"new_name"}` | Renames the catalog entry + moves the file; rejects a name collision cleanly, no data loss |
 | POST | `/collections/:name/delete` | — | Removes the catalog row + deletes the file |
-| POST | `/collections/:name/endpoints/add` | `{"endpoint_id"}` | Rejects an endpoint_id that doesn't exist centrally |
-| POST | `/collections/:name/endpoints/remove` | `{"endpoint_id"}` | |
+| POST | `/collections/:name/endpoints/remove` | `{"endpoint_id"}` | Direct removal stays available — removal doesn't carry the same "must be deliberately curated via testing" risk as addition |
 | GET | `/collections/:name/endpoints` | — | Lists members with `added_at` |
 
 **Tag rollups** (global count per tag, not per-collection membership):
@@ -234,6 +238,7 @@ Same catalog pattern as Collections (register a name, list, per-view tag rollups
 - No size limits enforced anywhere (Collections count, endpoints-per-list, History/Bookmarks caps).
 - Deleting an endpoint doesn't cascade — orphaned bookmarks, collection memberships, and history/request/response data can be left behind.
 - No query-param (QP) concept anywhere — an endpoint's URL is stored as one opaque string. No endpoint to add/count/select individual QPs yet; this is still being designed (see Ravi's 2026-09-07 email).
-- `/collections/:name/endpoints/add` will accept any endpoint that exists centrally — it does not require the endpoint be bookmarked first, even though that's the intended user flow (History → Bookmark → Collection). Don't build a "freely add any endpoint to any collection" UI against it; that gate is expected to land later.
 - Import (`/repo/:collection/:filename/import`) only extracts a zip to disk — it does not create/update endpoint, bookmark, or collection-membership DB rows from the imported files.
 - Webview/Repoview have no independent per-instance SQLite file yet (unlike Collections) and no endpoint-membership routes at all.
+- The session backup used by `/bookmarks/:collection/load` (`__session_backup__`) is a **single rolling slot, not per-collection**, by design (confirmed, 2026-09-08): load A, leave bookmarks unsaved, load B, load A again — A's unsaved bookmarks are gone, overwritten when B loaded. Only the most recent switch is protected.
+- `active_collection` is in-memory (`AppState`, not persisted) — a webserver restart forgets which collection was loaded, even though the `active` bookmarks themselves are still in the DB. The next bookmark-add attempt will correctly demand a fresh `/bookmarks/:collection/load` rather than silently misbehaving, but this is worth knowing.

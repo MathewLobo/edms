@@ -235,64 +235,39 @@ pub fn delete_bookmark_active(core: &EdmsCore, queries: &QueryMap, endpoint_id: 
 }
 
 /* ---------------- collections (folder column) ---------------- */
+//
+// System 1 (arbitrary named bookmark folders as pseudo-collections) is
+// retired as of the bookmark/collection merge (Mathew, 2026-09-08).
+// `create_collection_from_active`/`load_collection_into_active` — which
+// used to snapshot/restore against the `bookmarks` table's `folder`
+// column — are gone. Real collections are System 2
+// (`storage/collections/{name}.sqlite`, via CollectionMembershipOps);
+// see handlers/bookmarks.rs for the load/save/unsave flow that replaces
+// them, using this backup helper as its "don't lose unsaved active
+// bookmarks on switch" step.
 
-pub fn create_collection_from_active(core: &EdmsCore, queries: &QueryMap, collection: &str) -> EdmsResult<usize> {
-    // Copy active bookmarks into folder=collection
-    let endpoint_ids = list_bookmarked_endpoints_active(core, queries)?;
-    let mut inserted = 0usize;
-
-    for eid in endpoint_ids {
-        // Check for duplicates in target collection too
-        let b4 = queries.get_bookmark_query("B4").ok_or(EdmsError::UnknownError)?;
-        let existing: Vec<i64> = core.cproc(
-            b4,
-            &[&collection, &eid],
-            |row| row.get(0)
-        )?;
-        
-        if existing.first().copied().unwrap_or(0) == 0 {
-            let b7 = queries.get_bookmark_query("B7").ok_or(EdmsError::UnknownError)?;
-            inserted += core.proc(
-                b7,
-                &[&eid, &collection],
-            )?;
-        }
-    }
-
-    Ok(inserted)
-}
-
-pub fn load_collection_into_active(core: &EdmsCore, queries: &QueryMap, collection: &str) -> EdmsResult<(bool, usize)> {
+/// Backs up whatever's currently in `active` into the single rolling
+/// `__session_backup__` slot, overwriting whatever backup was there
+/// before. Returns whether there was anything to back up.
+///
+/// Per Mathew (2026-09-08): kept as the existing single-slot behavior —
+/// not per-collection — so only the *most recent* switch is protected,
+/// by design, not every collection ever visited.
+pub fn backup_active_bookmarks(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<bool> {
     let active_count = bookmarks_count_active(core, queries)?;
-    let moved_to_backup = active_count > 0;
-
-    if moved_to_backup {
-        // Clear old backup before creating new one
-        let b2 = queries.get_bookmark_query("B2").ok_or(EdmsError::UnknownError)?;
-        let _ = core.proc(b2, &[&SESSION_BACKUP_FOLDER]);
-        
-        // Copy active into backup
-        let endpoint_ids = list_bookmarked_endpoints_active(core, queries)?;
-        let b7 = queries.get_bookmark_query("B7").ok_or(EdmsError::UnknownError)?;
-        for eid in endpoint_ids {
-            let _ = core.proc(
-                b7,
-                &[&eid, &SESSION_BACKUP_FOLDER],
-            )?;
-        }
+    if active_count == 0 {
+        return Ok(false);
     }
 
-    // Replace active with collection
-    clear_bookmarks_active(core, queries)?;
-    
-    let b3 = queries.get_bookmark_query("B3").ok_or(EdmsError::UnknownError)?;
-    let ids: Vec<String> = core.cproc(b3, &[&collection], |row| row.get(0))?;
-    let mut loaded = 0usize;
-    for eid in ids {
-        loaded += insert_bookmark_active(core, queries, &eid, None)?;
-    }
+    let b2 = queries.get_bookmark_query("B2").ok_or(EdmsError::UnknownError)?;
+    let _ = core.proc(b2, &[&SESSION_BACKUP_FOLDER]);
 
-    Ok((moved_to_backup, loaded))
+    let endpoint_ids = list_bookmarked_endpoints_active(core, queries)?;
+    let b7 = queries.get_bookmark_query("B7").ok_or(EdmsError::UnknownError)?;
+    for eid in endpoint_ids {
+        core.proc(b7, &[&eid, &SESSION_BACKUP_FOLDER])?;
+    }
+    Ok(true)
 }
 
 pub fn restore_from_backup(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<usize> {
