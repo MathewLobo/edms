@@ -2914,16 +2914,140 @@ function setupRunner() {
 // RUN TEST
 // =========================================
 
+// =========================================
+// RUN TEST
+// =========================================
+
 async function runTestEndpoint() {
 
-    if (!selectedTestEndpoint) {
+    /*
+     * New endpoint flow:
+     *
+     * 1. If an endpoint is selected, retest that endpoint.
+     * 2. If nothing is selected, use the URL/method fields directly.
+     * 3. Send endpoint_id as undefined.
+     * 4. Backend automatically creates the endpoint.
+     * 5. Resolve the newly created endpoint_id.
+     * 6. Fetch request/response using that ID.
+     */
 
-        console.warn(
-            "No endpoint selected."
+    // -------------------------------------
+    // METHOD
+    // -------------------------------------
+
+    const method =
+        String(
+            testMethod?.value ||
+            selectedTestEndpoint?.method ||
+            "GET"
+        ).toUpperCase();
+
+    // -------------------------------------
+    // ENDPOINT URL
+    // -------------------------------------
+
+    let endpointStr = "";
+
+    if (selectedTestEndpoint) {
+
+        endpointStr =
+            selectedTestEndpoint.endpoint_str ||
+            (
+                selectedTestEndpoint.baseUrl ||
+                ""
+            ) +
+            (
+                selectedTestEndpoint.endpoint ||
+                ""
+            );
+
+    } else {
+
+        /*
+         * No endpoint selected.
+         * Build the endpoint directly from
+         * the URL fields entered by the user.
+         */
+
+        if (addressCombinedMode && urlFullInput) {
+
+            endpointStr =
+                urlFullInput.value.trim();
+
+        } else {
+
+            endpointStr =
+                (
+                    baseUrl?.value.trim() ||
+                    ""
+                ) +
+                (
+                    endpointPath?.value.trim() ||
+                    ""
+                );
+
+        }
+
+    }
+
+    if (!endpointStr) {
+
+        window.alert(
+            "Enter an endpoint URL first."
         );
 
         return;
     }
+
+    // -------------------------------------
+    // CREATE TEMPORARY ENDPOINT STATE
+    // -------------------------------------
+
+    /*
+     * When no endpoint exists yet, create a
+     * temporary frontend representation.
+     *
+     * IMPORTANT:
+     * id stays undefined.
+     *
+     * The backend will create the real endpoint.
+     */
+
+    if (!selectedTestEndpoint) {
+
+        selectedTestEndpoint = {
+
+            id:
+                undefined,
+
+            method,
+
+            endpoint_str:
+                endpointStr,
+
+            baseUrl:
+                baseUrl?.value.trim() ||
+                "",
+
+            endpoint:
+                endpointPath?.value.trim() ||
+                endpointStr,
+
+            annotation:
+                annotationInput?.value ||
+                "",
+
+            qps: [],
+
+            tags: []
+
+        };
+
+    }
+
+    // -------------------------------------
+    // CREATE DEFAULT QP IF NEEDED
+    // -------------------------------------
 
     if (!selectedTestQP) {
 
@@ -3003,7 +3127,7 @@ async function runTestEndpoint() {
                 );
 
         // -------------------------------------
-        // REQUEST BODY
+        // REQUEST
         // -------------------------------------
 
         const request =
@@ -3047,32 +3171,28 @@ async function runTestEndpoint() {
         }
 
         // -------------------------------------
-        // METHOD
+        // ENDPOINT ID
         // -------------------------------------
 
-        const method =
-            String(
-                testMethod?.value ||
-                selectedTestEndpoint.method ||
-                "GET"
-            ).toUpperCase();
+        /*
+         * Existing endpoint:
+         *     send its ID
+         *
+         * New endpoint:
+         *     send undefined
+         *
+         * The backend will automatically create
+         * the endpoint in the second case.
+         */
 
-        const endpointStr =
-            selectedTestEndpoint.endpoint_str ||
-            (
-                selectedTestEndpoint.baseUrl ||
-                ""
-            ) +
-            (
-                selectedTestEndpoint.endpoint ||
-                ""
-            );
+        const endpointId =
+            selectedTestEndpoint.id;
 
         console.log(
             "Starting backend test:",
             {
-                endpointId:
-                    selectedTestEndpoint.id,
+
+                endpointId,
 
                 endpointStr,
 
@@ -3085,13 +3205,13 @@ async function runTestEndpoint() {
         );
 
         // -------------------------------------
-        // SEND TO RUST BACKEND
+        // SEND TO BACKEND
         // -------------------------------------
 
         window.EdmsAPI.startTest(
             ws,
 
-            selectedTestEndpoint.id,
+            endpointId,
 
             endpointStr,
 
@@ -3109,7 +3229,7 @@ async function runTestEndpoint() {
         );
 
         // -------------------------------------
-        // WAIT
+        // WAIT FOR TEST
         // -------------------------------------
 
         const event =
@@ -3121,12 +3241,162 @@ async function runTestEndpoint() {
         );
 
         // -------------------------------------
+        // RESOLVE ENDPOINT ID
+        // -------------------------------------
+
+        let resolvedEndpointId =
+            event.payload?.endpoint_id ??
+            event.payload?.endpointId ??
+            event.endpoint_id ??
+            event.endpointId ??
+            activeTestEndpointIdFromState();
+
+        /*
+         * If the backend did not include endpoint_id
+         * in the finished event, reload the endpoint
+         * snapshot and find the endpoint by URL.
+         */
+
+        if (
+            resolvedEndpointId ===
+                undefined ||
+            resolvedEndpointId ===
+                null
+        ) {
+
+            console.log(
+                "Endpoint ID not present in test event. Reloading endpoint snapshot..."
+            );
+
+            await loadEndpointsFromBackend();
+
+            const createdEndpoint =
+                endpoints.find(
+                    endpoint =>
+                        String(
+                            endpoint.endpoint_str ||
+                            ""
+                        ) ===
+                        String(
+                            endpointStr
+                        )
+                );
+
+            if (createdEndpoint) {
+
+                resolvedEndpointId =
+                    createdEndpoint.id;
+
+            }
+
+        }
+
+        if (
+            resolvedEndpointId ===
+                undefined ||
+            resolvedEndpointId ===
+                null
+        ) {
+
+            throw new Error(
+                "Backend created the test, but the endpoint ID could not be resolved."
+            );
+
+        }
+
+        console.log(
+            "Resolved endpoint ID:",
+            resolvedEndpointId
+        );
+
+        // -------------------------------------
+        // USE REAL BACKEND ENDPOINT
+        // -------------------------------------
+
+        let backendEndpoint =
+            findEndpoint(
+                resolvedEndpointId
+            );
+
+        /*
+         * If the endpoint wasn't already present in
+         * the current snapshot, reload once more.
+         */
+
+        if (!backendEndpoint) {
+
+            await loadEndpointsFromBackend();
+
+            backendEndpoint =
+                findEndpoint(
+                    resolvedEndpointId
+                );
+
+        }
+
+        if (backendEndpoint) {
+
+            /*
+             * Preserve the local QP because QPs are
+             * currently frontend-local.
+             */
+
+            const localQP =
+                selectedTestQP;
+
+            selectedTestEndpoint =
+                backendEndpoint;
+
+            if (
+                !Array.isArray(
+                    selectedTestEndpoint.qps
+                )
+            ) {
+
+                selectedTestEndpoint.qps =
+                    [];
+
+            }
+
+            /*
+             * Reuse the temporary/default QP.
+             */
+
+            if (
+                selectedTestEndpoint.qps.length ===
+                0
+            ) {
+
+                selectedTestEndpoint.qps.push(
+                    localQP
+                );
+
+            }
+
+            selectedTestQP =
+                localQP;
+
+        } else {
+
+            /*
+             * Backend endpoint snapshot could not be
+             * resolved, but we do have its ID.
+             */
+
+            selectedTestEndpoint.id =
+                resolvedEndpointId;
+
+        }
+
+        // -------------------------------------
         // REQUEST NUMBER
         // -------------------------------------
 
         const requestNumber =
             event.payload?.request_number ??
+            event.payload?.requestNumber ??
             event.request_number ??
+            event.requestNumber ??
             activeRequestNumber;
 
         if (
@@ -3156,12 +3426,12 @@ async function runTestEndpoint() {
             await Promise.all([
 
                 window.EdmsAPI.fetchRequest(
-                    selectedTestEndpoint.id,
+                    resolvedEndpointId,
                     requestNumber
                 ),
 
                 window.EdmsAPI.fetchResponse(
-                    selectedTestEndpoint.id,
+                    resolvedEndpointId,
                     requestNumber
                 )
 
@@ -3220,7 +3490,7 @@ async function runTestEndpoint() {
         }
 
         // -------------------------------------
-        // RESPONSE STATUS
+        // RESPONSE META
         // -------------------------------------
 
         const statusCode =
@@ -3295,7 +3565,7 @@ async function runTestEndpoint() {
         };
 
         // -------------------------------------
-        // PERSIST QP RESULT LOCALLY
+        // SAVE LOCAL QP
         // -------------------------------------
 
         saveLocalQPs();
@@ -3305,26 +3575,36 @@ async function runTestEndpoint() {
         // -------------------------------------
 
         renderCurrentRequest();
+
         renderCurrentResponse();
 
+        /*
+         * Make sure the newly created endpoint
+         * appears in the sidebar.
+         */
+
+        if (
+            activeSidebarTab ===
+            "endpoints"
+        ) {
+
+            applyTestFilters();
+
+        }
+
         // -------------------------------------
-        // RELOAD BACKEND HISTORY
+        // RELOAD HISTORY
         // -------------------------------------
 
         try {
 
             await loadHistoryFromBackend();
 
-            if (
-                activeSidebarTab ===
-                "history"
-            ) {
+            applyTestFilters();
 
-                applyTestFilters();
-
-            }
-
-        } catch (historyReloadError) {
+        } catch (
+            historyReloadError
+        ) {
 
             console.warn(
                 "Could not reload backend history:",
@@ -3393,7 +3673,6 @@ async function runTestEndpoint() {
         );
 
     }
-
 }
 
 // =========================================
@@ -4683,6 +4962,21 @@ function getBookmarkEndpointId(
         bookmark.endpoint_id
     );
 
+}
+function activeTestEndpointIdFromState() {
+
+    if (
+        selectedTestEndpoint?.id !==
+        undefined &&
+        selectedTestEndpoint?.id !==
+        null
+    ) {
+
+        return selectedTestEndpoint.id;
+
+    }
+
+    return null;
 }
 
 function isEndpointBookmarked(

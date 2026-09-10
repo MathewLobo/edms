@@ -199,58 +199,276 @@ async function init() {
 // LOAD DATA
 // ============================================================
 
-// ============================================================
-// LOAD DATA
-// ============================================================
-
 async function loadData() {
 
     try {
 
-        const [
-            backendEndpoints,
+        // ----------------------------------------------------
+        // FIRST: load the ACTIVE BOOKMARK workspace
+        // ----------------------------------------------------
+
+        const bookmarkSnapshot =
+            await loadBookmarksFromBackend();
+
+
+        console.log(
+            "BOOKMARK SNAPSHOT RECEIVED:",
+            bookmarkSnapshot
+        );
+
+
+        const activeBookmarks =
+            Array.isArray(
+                bookmarkSnapshot?.bookmarks
+            )
+                ? bookmarkSnapshot.bookmarks
+                : [];
+
+
+        console.log(
+            "ACTIVE COLLECTION:",
+            bookmarkSnapshot?.active_collection
+        );
+
+
+        console.log(
+            "ACTIVE BOOKMARKS:",
             activeBookmarks
-        ] = await Promise.all([
-
-            loadEndpointsFromBackend(),
-
-            loadBookmarksFromBackend()
-
-        ]);
+        );
 
 
-        const bookmarkedIds =
-            new Set(
-                activeBookmarks
-                    .map(
-                        getBookmarkEndpointId
-                    )
-                    .filter(
-                        id =>
-                            id !== undefined &&
-                            id !== null
-                    )
-                    .map(
-                        id =>
-                            String(id)
-                    )
-            );
+        // ----------------------------------------------------
+        // If backend gave full endpoint data inside bookmarks,
+        // use it directly.
+        // ----------------------------------------------------
 
-
-        /*
-         * Bookmark View represents the backend Active Collection
-         * workspace.
-         *
-         * Therefore only endpoints currently present in the
-         * active bookmark workspace should be displayed here.
-         */
         endpoints =
-            backendEndpoints.filter(
+            activeBookmarks
+                .map(bookmark => {
+
+                    const endpointId =
+                        getBookmarkEndpointId(
+                            bookmark
+                        );
+
+
+                    if (
+                        endpointId === null ||
+                        endpointId === undefined
+                    ) {
+
+                        console.warn(
+                            "Bookmark has no endpoint ID:",
+                            bookmark
+                        );
+
+                        return null;
+
+                    }
+
+
+                    /*
+                     * Some backend responses may contain
+                     * endpoint data directly in the bookmark.
+                     *
+                     * Keep whatever the backend actually gave us.
+                     */
+
+                    return {
+
+                        ...(typeof bookmark === "object"
+                            ? bookmark
+                            : {}),
+
+                        id:
+                            bookmark?.id ??
+                            bookmark?.endpoint_id ??
+                            bookmark?.endpointId ??
+                            endpointId,
+
+                        endpoint_id:
+                            endpointId,
+
+                        endpoint:
+                            bookmark?.endpoint_str ??
+                            bookmark?.endpoint ??
+                            "",
+
+                        method:
+                            bookmark?.method ??
+                            "",
+
+                        annotation:
+                            bookmark?.annotation ??
+                            "",
+
+                        tags:
+                            Array.isArray(
+                                bookmark?.tags
+                            )
+                                ? bookmark.tags
+                                : [],
+
+                        qps:
+                            Array.isArray(
+                                bookmark?.qps
+                            )
+                                ? bookmark.qps
+                                : [],
+
+                        updated:
+                            bookmark?.updated ??
+                            null
+
+                    };
+
+                })
+                .filter(Boolean);
+
+
+        // ----------------------------------------------------
+        // SECOND: only if bookmarks contain IDs but no endpoint
+        // information, fetch the endpoint snapshot and merge it.
+        // ----------------------------------------------------
+
+        const needsEndpointData =
+            endpoints.some(
                 endpoint =>
-                    bookmarkedIds.has(
-                        String(endpoint.id)
-                    )
+                    !endpoint.endpoint ||
+                    !endpoint.method
             );
+
+
+        if (needsEndpointData) {
+
+            console.log(
+                "Bookmark data contains IDs only. Loading endpoint snapshot..."
+            );
+
+
+            const backendEndpoints =
+                await loadEndpointsFromBackend();
+
+
+            console.log(
+                "ENDPOINT SNAPSHOT:",
+                backendEndpoints
+            );
+
+
+            const endpointMap =
+                new Map();
+
+
+            backendEndpoints.forEach(
+                backendEndpoint => {
+
+                    const endpointId =
+                        backendEndpoint?.id ??
+                        backendEndpoint?.endpoint_id ??
+                        backendEndpoint?.endpointId;
+
+
+                    if (
+                        endpointId !== null &&
+                        endpointId !== undefined
+                    ) {
+
+                        endpointMap.set(
+                            String(endpointId),
+                            backendEndpoint
+                        );
+
+                    }
+
+                }
+            );
+
+
+            endpoints =
+                endpoints.map(
+                    bookmark => {
+
+                        const backendEndpoint =
+                            endpointMap.get(
+                                String(
+                                    bookmark.endpoint_id
+                                )
+                            );
+
+
+                        if (!backendEndpoint) {
+
+                            console.warn(
+                                "No endpoint data found for bookmark:",
+                                bookmark
+                            );
+
+                            return bookmark;
+
+                        }
+
+
+                        return {
+
+                            ...backendEndpoint,
+
+                            ...bookmark,
+
+                            id:
+                                backendEndpoint.id ??
+                                backendEndpoint.endpoint_id ??
+                                bookmark.id,
+
+                            endpoint_id:
+                                bookmark.endpoint_id,
+
+                            endpoint:
+                                backendEndpoint.endpoint_str ??
+                                backendEndpoint.endpoint ??
+                                bookmark.endpoint ??
+                                "",
+
+                            method:
+                                backendEndpoint.method ??
+                                bookmark.method ??
+                                "",
+
+                            annotation:
+                                backendEndpoint.annotation ??
+                                bookmark.annotation ??
+                                "",
+
+                            tags:
+                                Array.isArray(bookmark.tags) &&
+                                bookmark.tags.length
+                                    ? bookmark.tags
+                                    : Array.isArray(
+                                        backendEndpoint.tags
+                                    )
+                                        ? backendEndpoint.tags
+                                        : [],
+
+                            qps:
+                                Array.isArray(bookmark.qps)
+                                    ? bookmark.qps
+                                    : Array.isArray(
+                                        backendEndpoint.qps
+                                    )
+                                        ? backendEndpoint.qps
+                                        : [],
+
+                            updated:
+                                backendEndpoint.updated ??
+                                bookmark.updated ??
+                                null
+
+                        };
+
+                    }
+                );
+
+        }
 
 
         filteredEndpoints =
@@ -258,16 +476,15 @@ async function loadData() {
 
 
         console.log(
-            "Bookmark View loaded:",
-            endpoints.length,
-            "active endpoints"
+            "FINAL BOOKMARK VIEW ENDPOINTS:",
+            endpoints
         );
 
 
     } catch (error) {
 
         console.error(
-            "Failed to load Bookmark View data:",
+            "FAILED TO LOAD BOOKMARK VIEW:",
             error
         );
 
@@ -289,96 +506,178 @@ async function loadData() {
 // LOAD ENDPOINTS FROM BACKEND
 // ============================================================
 
-function loadEndpointsFromBackend() {
-    return new Promise((resolve, reject) => {
+function loadBookmarksFromBackend() {
 
-        if (
-            !window.EdmsAPI ||
-            typeof window.EdmsAPI.connectEndpointLoader !==
-                "function"
-        ) {
-            reject(
-                new Error(
-                    "Endpoint loader API is unavailable."
-                )
-            );
+    return new Promise(
+        (resolve, reject) => {
 
-            return;
-        }
+            if (
+                !window.EdmsAPI ||
+                typeof window.EdmsAPI.connectBookmarkLoader !==
+                    "function"
+            ) {
 
-        const ws =
-            window.EdmsAPI.connectEndpointLoader();
+                reject(
+                    new Error(
+                        "Bookmark loader API is unavailable."
+                    )
+                );
 
-        let settled = false;
+                return;
 
-        const finish = (
-            callback,
-            value
-        ) => {
+            }
 
-            if (settled) return;
 
-            settled = true;
+            const ws =
+                window.EdmsAPI.connectBookmarkLoader();
 
-            try {
-                ws.close();
-            } catch {}
 
-            callback(value);
-        };
+            let settled = false;
 
-        ws.addEventListener(
-            "message",
-            event => {
+
+            const finish = (
+                callback,
+                value
+            ) => {
+
+                if (settled) return;
+
+                settled = true;
+
 
                 try {
 
-                    const message =
-                        JSON.parse(event.data);
+                    ws.close();
 
-                    if (
-                        message.type ===
-                            "snapshot" &&
-                        Array.isArray(
-                            message.endpoints
-                        )
-                    ) {
+                } catch {}
+
+
+                callback(value);
+
+            };
+
+
+            ws.addEventListener(
+                "open",
+                () => {
+
+                    console.log(
+                        "Bookmark WebSocket connected."
+                    );
+
+                }
+            );
+
+
+            ws.addEventListener(
+                "message",
+                event => {
+
+                    try {
+
+                        const message =
+                            JSON.parse(
+                                event.data
+                            );
+
+
+                        console.log(
+                            "BOOKMARK WS MESSAGE:",
+                            message
+                        );
+
+
+                        if (
+                            message.type !==
+                            "snapshot"
+                        ) {
+
+                            return;
+
+                        }
+
+
+                        if (
+                            !Array.isArray(
+                                message.bookmarks
+                            )
+                        ) {
+
+                            finish(
+                                reject,
+                                new Error(
+                                    "Bookmark snapshot contains no bookmarks array."
+                                )
+                            );
+
+                            return;
+
+                        }
+
 
                         finish(
                             resolve,
-                            message.endpoints
+                            message
+                        );
+
+                    } catch (error) {
+
+                        finish(
+                            reject,
+                            error
                         );
 
                     }
 
-                } catch (error) {
+                }
+            );
 
-                    finish(
-                        reject,
+
+            ws.addEventListener(
+                "error",
+                error => {
+
+                    console.error(
+                        "Bookmark WebSocket error:",
                         error
                     );
 
+
+                    finish(
+                        reject,
+                        new Error(
+                            "Bookmark WebSocket failed."
+                        )
+                    );
+
                 }
+            );
 
-            }
-        );
 
-        ws.addEventListener(
-            "error",
-            () => {
+            ws.addEventListener(
+                "close",
+                () => {
 
-                finish(
-                    reject,
-                    new Error(
-                        "Endpoint WebSocket failed."
-                    )
-                );
+                    if (!settled) {
 
-            }
-        );
+                        finish(
+                            reject,
+                            new Error(
+                                "Bookmark WebSocket closed before snapshot was received."
+                            )
+                        );
 
-    });
+                    }
+
+                }
+            );
+
+        }
+    );
+
 }
+
+
 
 
 // ============================================================
@@ -386,6 +685,7 @@ function loadEndpointsFromBackend() {
 // ============================================================
 
 function loadBookmarksFromBackend() {
+
     return new Promise((resolve, reject) => {
 
         if (
@@ -393,6 +693,7 @@ function loadBookmarksFromBackend() {
             typeof window.EdmsAPI.connectBookmarkLoader !==
                 "function"
         ) {
+
             reject(
                 new Error(
                     "Bookmark loader API is unavailable."
@@ -400,12 +701,16 @@ function loadBookmarksFromBackend() {
             );
 
             return;
+
         }
+
 
         const ws =
             window.EdmsAPI.connectBookmarkLoader();
 
+
         let settled = false;
+
 
         const finish = (
             callback,
@@ -416,12 +721,18 @@ function loadBookmarksFromBackend() {
 
             settled = true;
 
+
             try {
+
                 ws.close();
+
             } catch {}
 
+
             callback(value);
+
         };
+
 
         ws.addEventListener(
             "message",
@@ -430,7 +741,16 @@ function loadBookmarksFromBackend() {
                 try {
 
                     const message =
-                        JSON.parse(event.data);
+                        JSON.parse(
+                            event.data
+                        );
+
+
+                    console.log(
+                        "Bookmark WebSocket message:",
+                        message
+                    );
+
 
                     if (
                         message.type ===
@@ -442,10 +762,11 @@ function loadBookmarksFromBackend() {
 
                         finish(
                             resolve,
-                            message.bookmarks
+                            message
                         );
 
                     }
+
 
                 } catch (error) {
 
@@ -458,6 +779,7 @@ function loadBookmarksFromBackend() {
 
             }
         );
+
 
         ws.addEventListener(
             "error",
@@ -474,6 +796,7 @@ function loadBookmarksFromBackend() {
         );
 
     });
+
 }
 
 
