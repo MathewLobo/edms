@@ -1,27 +1,25 @@
 // init/seed.mjs — first-boot demo data for the EDMS stack.
 //
 // Idempotent: if the backend already has endpoints it exits without
-// touching anything. Otherwise it populates a realistic hashedtokens /
-// EDMS dataset — endpoints, tags, test-view history, and collections
-// whose members include endpoints that have actually been run (so they
-// carry request / response / headers data).
+// touching anything. Otherwise it populates a realistic dataset — every
+// endpoint is created by actually being RUN against https://dummyjson.com
+// (a public test API), so each one carries real request / response /
+// headers data and a genuine history entry, exactly as the product
+// intends ("an endpoint exists because it was tested").
 //
 // Runs automatically as the `seed` service in docker-compose.yml on
-// `docker compose up`. Also runnable by hand against a live backend:
+// `docker compose up`, then exits. Also runnable by hand:
 //   EDMS_BASE=http://localhost:3000 node init/seed.mjs
 //
-// Requires Node 22+ (built-in fetch + WebSocket).
+// Requires Node 22+ (built-in fetch + WebSocket) and outbound internet
+// from the backend container (it's the backend that makes the test call).
+// Offline: endpoints still get created, just without run data.
 //
-// It talks only to the HTTP/WS API — it never writes files or the DB
-// directly — so it stays correct if the on-disk storage layout moves.
+// Talks only to the HTTP/WS API — never the DB or filesystem — so it
+// stays correct if the on-disk storage layout moves.
 
 const BASE = process.env.EDMS_BASE || "http://localhost:3000";
 const WS_BASE = BASE.replace(/^http/, "ws");
-
-// The backend routes the test call through a detached child process that
-// runs inside the webserver container, so "internal" endpoints target
-// the server's own loopback — reachable, fast, deterministic.
-const LOOPBACK = "http://localhost:3000";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -36,7 +34,7 @@ async function post(path, body) {
   return { status: r.status, json };
 }
 
-function wsOnce(path, send, waitType, timeoutMs = 12000) {
+function wsOnce(path, send, waitType, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(WS_BASE + path);
     let done = false;
@@ -64,43 +62,39 @@ function wsOnce(path, send, waitType, timeoutMs = 12000) {
 }
 
 // ── data ────────────────────────────────────────────────────────────
+// Real, reachable URLs against https://dummyjson.com. `runs` is how many
+// times to test it (>1 gives an endpoint multiple request/response sets).
 
-// External hashedtokens API surface — created but not run. These show up
-// in the Endpoints tab and as collection members.
-const EXTERNAL = [
-  { method: "POST",   url: "https://api.hashedtokens.com/v1/auth/login",           note: "Exchange credentials for an access + refresh token pair." },
-  { method: "POST",   url: "https://api.hashedtokens.com/v1/auth/logout",          note: "Revoke the current session's refresh token." },
-  { method: "POST",   url: "https://api.hashedtokens.com/v1/auth/refresh",         note: "Rotate an access token using a valid refresh token." },
-  { method: "POST",   url: "https://api.hashedtokens.com/v1/auth/register",        note: "Create a new hashedtokens account." },
-  { method: "GET",    url: "https://api.hashedtokens.com/v1/auth/session",         note: "Return the caller's current session and scopes." },
-  { method: "GET",    url: "https://api.hashedtokens.com/v1/users",                note: "List users in the org, paginated." },
-  { method: "GET",    url: "https://api.hashedtokens.com/v1/users/{id}",           note: "Fetch a single user by ID." },
-  { method: "POST",   url: "https://api.hashedtokens.com/v1/users",               note: "Invite / provision a new user." },
-  { method: "PUT",    url: "https://api.hashedtokens.com/v1/users/{id}",           note: "Update a user's profile or role." },
-  { method: "DELETE", url: "https://api.hashedtokens.com/v1/users/{id}",           note: "Deactivate a user." },
-  { method: "GET",    url: "https://api.hashedtokens.com/v1/documents",            note: "List documents visible to the caller." },
-  { method: "GET",    url: "https://api.hashedtokens.com/v1/documents/{id}",       note: "Fetch document metadata + latest version." },
-  { method: "POST",   url: "https://api.hashedtokens.com/v1/documents",           note: "Create a new document." },
-  { method: "PUT",    url: "https://api.hashedtokens.com/v1/documents/{id}",       note: "Replace a document's contents (new version)." },
-  { method: "DELETE", url: "https://api.hashedtokens.com/v1/documents/{id}",       note: "Soft-delete a document." },
-  { method: "POST",   url: "https://api.hashedtokens.com/v1/documents/{id}/share", note: "Grant another user access to a document." },
-  { method: "GET",    url: "https://api.hashedtokens.com/v1/webhooks",             note: "List configured webhooks." },
-  { method: "POST",   url: "https://api.hashedtokens.com/v1/webhooks",            note: "Register a webhook endpoint + event filter." },
-  { method: "DELETE", url: "https://api.hashedtokens.com/v1/webhooks/{id}",        note: "Remove a webhook." },
-  { method: "GET",    url: "https://api.hashedtokens.com/v1/billing/usage",        note: "Usage counters for the current billing period." },
-  { method: "GET",    url: "https://api.hashedtokens.com/v1/admin/audit-log",      note: "Org audit log, most recent first." },
-  { method: "GET",    url: "https://api.hashedtokens.com/v1/admin/stats",          note: "Internal admin dashboard stats." },
+const API = "https://dummyjson.com";
+const ENDPOINTS = [
+  { method: "POST",   url: `${API}/auth/login`,            note: "Authenticate with username + password, receive a bearer token.", runs: 2 },
+  { method: "GET",    url: `${API}/auth/me`,               note: "Return the currently authenticated user (401 without a token).", runs: 1 },
+  { method: "GET",    url: `${API}/users`,                 note: "List all users, paginated (limit / skip).", runs: 2 },
+  { method: "GET",    url: `${API}/users/1`,               note: "Fetch a single user by ID.", runs: 1 },
+  { method: "GET",    url: `${API}/users/search?q=John`,   note: "Search users by name.", runs: 1 },
+  { method: "POST",   url: `${API}/users/add`,             note: "Provision a new user.", runs: 1 },
+  { method: "PUT",    url: `${API}/users/1`,               note: "Update a user's profile.", runs: 1 },
+  { method: "DELETE", url: `${API}/users/1`,               note: "Deactivate a user.", runs: 1 },
+  { method: "GET",    url: `${API}/products`,              note: "List products, paginated.", runs: 2 },
+  { method: "GET",    url: `${API}/products/1`,            note: "Fetch a product by ID.", runs: 1 },
+  { method: "GET",    url: `${API}/products/search?q=phone`, note: "Full-text product search.", runs: 1 },
+  { method: "GET",    url: `${API}/products/categories`,   note: "List product categories.", runs: 1 },
+  { method: "POST",   url: `${API}/products/add`,          note: "Create a product.", runs: 1 },
+  { method: "PUT",    url: `${API}/products/1`,            note: "Update a product.", runs: 1 },
+  { method: "DELETE", url: `${API}/products/1`,            note: "Remove a product.", runs: 1 },
+  { method: "GET",    url: `${API}/carts`,                 note: "List all carts.", runs: 1 },
+  { method: "GET",    url: `${API}/carts/1`,               note: "Fetch a cart with its line items.", runs: 1 },
+  { method: "POST",   url: `${API}/carts/add`,             note: "Create a cart for a user.", runs: 1 },
+  { method: "GET",    url: `${API}/posts`,                 note: "List posts, paginated.", runs: 2 },
+  { method: "GET",    url: `${API}/posts/1`,               note: "Fetch a post by ID.", runs: 1 },
+  { method: "GET",    url: `${API}/posts/1/comments`,      note: "Comments on a post.", runs: 1 },
+  { method: "POST",   url: `${API}/posts/add`,             note: "Create a post.", runs: 1 },
+  { method: "GET",    url: `${API}/todos`,                 note: "List todos.", runs: 1 },
+  { method: "GET",    url: `${API}/todos/random`,          note: "Fetch a random todo.", runs: 1 },
+  { method: "GET",    url: `${API}/comments`,              note: "List all comments.", runs: 1 },
 ];
 
-// EDMS's own endpoints — these get run, so they carry real
-// request/response/headers data and generate genuine history entries.
-const INTERNAL = [
-  { method: "GET", url: `${LOOPBACK}/home`,               note: "EDMS home view metadata — used as a liveness check." },
-  { method: "GET", url: `${LOOPBACK}/list-view`,          note: "EDMS list view metadata." },
-  { method: "GET", url: `${LOOPBACK}/dataview/dashboard`, note: "Live dashboard counts (endpoints / bookmarks / history)." },
-];
-
-const HISTORY_DETAILS = [
+const EXTRA_HISTORY = [
   "200 OK in 41ms", "200 OK in 63ms", "201 Created in 88ms",
   "204 No Content in 33ms", "400 Bad Request in 22ms",
   "401 Unauthorized in 18ms", "404 Not Found in 19ms",
@@ -125,23 +119,27 @@ async function alreadySeeded() {
   return (snap?.endpoints?.length || 0) > 0;
 }
 
-async function createEndpoint(e) {
-  const r = await post("/endpoints/create", {
-    endpoint_str: e.url,
-    method: e.method,
-    annotation: e.note,
-  });
-  if (!r.json?.endpoint_id) throw new Error(`create failed for ${e.method} ${e.url}: ${JSON.stringify(r.json)}`);
-  return r.json.endpoint_id;
-}
-
-async function runEndpoint(eid, url, method) {
-  await wsOnce(
+// Create-by-running: first run (no endpoint_id) creates + tests the
+// endpoint; extra runs reuse the allocated id. Returns the EID, or null
+// if the run never reported back (e.g. offline).
+async function seedEndpoint(e) {
+  const first = await wsOnce(
     "/test-view/run",
-    { type: "run_test", payload: { endpoint_id: eid, endpoint_str: url, method, body: {}, timeout_ms: 6000, tick_interval_ms: 300 } },
+    { type: "run_test", payload: { endpoint_str: e.url, method: e.method, annotation: e.note, body: {}, timeout_ms: 8000, tick_interval_ms: 300 } },
     "TestFinished",
-    15000,
+    18000,
   );
+  const eid = first?.event?.payload?.endpoint_id;
+  if (!eid) return null;
+  for (let k = 1; k < (e.runs || 1); k++) {
+    await wsOnce(
+      "/test-view/run",
+      { type: "run_test", payload: { endpoint_id: eid, endpoint_str: e.url, method: e.method, body: {}, timeout_ms: 8000, tick_interval_ms: 300 } },
+      "TestFinished",
+      18000,
+    );
+  }
+  return eid;
 }
 
 async function seedCollection(name, eids) {
@@ -162,46 +160,45 @@ async function main() {
     return;
   }
 
-  console.log(`[seed] creating ${EXTERNAL.length} hashedtokens API endpoints…`);
-  const ext = [];
-  for (const e of EXTERNAL) ext.push({ ...e, id: await createEndpoint(e) });
-
-  console.log(`[seed] creating + running ${INTERNAL.length} internal endpoints…`);
-  const intl = [];
-  for (const e of INTERNAL) {
-    const id = await createEndpoint(e);
-    intl.push({ ...e, id });
-    const runs = 1 + Math.floor(Math.random() * 3);
-    for (let k = 0; k < runs; k++) await runEndpoint(id, e.url, e.method);
+  console.log(`[seed] creating + running ${ENDPOINTS.length} endpoints against ${API} …`);
+  const ids = [];
+  let ran = 0;
+  for (const e of ENDPOINTS) {
+    const id = await seedEndpoint(e);
+    ids.push(id);
+    if (id) ran++;
   }
+  const eids = ids.filter(Boolean);
+  console.log(`[seed] ${ran}/${ENDPOINTS.length} endpoints have run data` + (ran < ENDPOINTS.length ? " (rest created without it — offline?)" : ""));
 
-  console.log("[seed] tagging…");
+  if (eids.length === 0) throw new Error("no endpoints were created — is the backend reachable and online?");
+
+  console.log("[seed] tagging …");
   const tag = (id, t) => post(`/tags/${id}/add`, { tag: t });
-  for (const e of ext.slice(0, 8)) await tag(e.id, "production");
-  for (const e of ext.slice(8, 12)) await tag(e.id, "internal");
-  for (const e of ext.slice(12, 14)) await tag(e.id, "deprecated");
-  for (const e of intl) await tag(e.id, "internal");
+  for (const id of eids.slice(0, 10)) await tag(id, "production");
+  for (const id of eids.slice(10, 15)) await tag(id, "internal");
+  for (const id of eids.slice(15, 17)) await tag(id, "deprecated");
 
-  console.log("[seed] history…");
-  for (const e of ext.slice(0, 16)) {
+  console.log("[seed] extra history …");
+  for (const id of eids.slice(0, 10)) {
     await post("/test-view/save/history", {
-      endpoint_id: e.id,
+      endpoint_id: id,
       action: "test",
-      details: HISTORY_DETAILS[Math.floor(Math.random() * HISTORY_DETAILS.length)],
+      details: EXTRA_HISTORY[Math.floor(Math.random() * EXTRA_HISTORY.length)],
     });
   }
 
-  console.log("[seed] collections…");
-  await seedCollection("auth-service", ext.slice(0, 5).map((e) => e.id));
-  await seedCollection("document-api", ext.slice(10, 16).map((e) => e.id));
-  await seedCollection("edms-internal", [...intl.map((e) => e.id), ext[20].id, ext[21].id]);
+  console.log("[seed] collections …");
+  await seedCollection("user-directory", eids.slice(2, 8));
+  await seedCollection("product-catalog", eids.slice(8, 15));
+  await seedCollection("content-api", eids.slice(18, 24));
 
-  // Leave edms-internal loaded with two endpoints bookmarked but NOT
-  // saved into it, so Bookmark View shows both states.
-  await post("/test-view/save/bookmark", { endpoint_id: ext[5].id, notes: "" });
-  await post("/test-view/save/bookmark", { endpoint_id: ext[6].id, notes: "" });
+  // Leave content-api loaded with two endpoints bookmarked but NOT saved
+  // into it, so Bookmark View shows both states.
+  if (eids[0]) await post("/test-view/save/bookmark", { endpoint_id: eids[0], notes: "" });
+  if (eids[1]) await post("/test-view/save/bookmark", { endpoint_id: eids[1], notes: "" });
 
-  console.log(`[seed] done — ${ext.length + intl.length} endpoints, 3 collections, 3 tags, history populated.`);
+  console.log(`[seed] done — ${eids.length} endpoints, 3 collections, 3 tags, history populated.`);
 }
 
 main()
