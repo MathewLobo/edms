@@ -26,7 +26,7 @@ services:
       dockerfile: Dockerfile
     container_name: edms-frontend
     ports:
-      - "8080:80"
+      - "3911:80"  # per the folder-schema doc — open localhost:3911 for the UI
     depends_on:
       - webserver
     networks:
