@@ -2,6 +2,7 @@
 name = "rust-webserver"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"  # pulled up by the `compute` dependency — see its Cargo.toml
 
 [[bin]]
 name = "rust-webserver"

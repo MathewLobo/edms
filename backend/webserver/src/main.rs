@@ -58,7 +58,14 @@ use handlers::{
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     //Folder structure
-    let root = compute::folder_manager::default_root_path();
+    // EDMS_ROOT lets the deployment pin the storage root explicitly —
+    // needed under Docker, where default_root_path() (which walks up
+    // looking for a `compute` dir) resolves to `/edms_root` at runtime
+    // while the persistent volume may be mounted elsewhere. Falls back
+    // to the walk-up behavior for local `cargo run`.
+    let root = std::env::var("EDMS_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| compute::folder_manager::default_root_path());
     println!("Initializing EDMS root at: {:?}", root);
     
     compute::folder_manager::verify_and_init(&root)

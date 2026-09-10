@@ -2,6 +2,11 @@
 name = "compute"
 version = "0.1.0"
 edition = "2024"
+# edition 2024 needs rustc >= 1.85; a dependency pushes the real floor to
+# 1.88. Declared so `cargo build` on an older toolchain fails with a
+# clear "requires rustc 1.88" message instead of a cryptic edition error
+# (issue #31 — Wesley). Docker's rust:1.90 image is fine.
+rust-version = "1.88"
 
 [lib]
 name = "compute"

@@ -13,6 +13,10 @@ services:
     environment:
       - RUST_LOG=info
       - EDMS_DB_PATH=/app/data/edms.db
+      # Pin the storage root to where the edms-root volume is mounted —
+      # without this the app resolves it to /edms_root at runtime and the
+      # volume below persists nothing (issue #31).
+      - EDMS_ROOT=/app/edms_root
     networks:
       - hashedtokens-edms
 
