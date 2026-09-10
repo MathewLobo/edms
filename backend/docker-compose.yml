@@ -12,6 +12,10 @@ services:
     environment:
       - RUST_LOG=info
       - EDMS_DB_PATH=/app/data/edms.db
+      # Pin the storage root to where the volume below is actually
+      # mounted — without this the app resolves it to /edms_root at
+      # runtime and the edms-root volume persists nothing.
+      - EDMS_ROOT=/app/edms_root
 
   # Per Ravi (2026-09-08): one command, both images — clone the repo, run
   # compose, the app shows up. Frontend's own JS talks to the backend

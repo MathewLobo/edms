@@ -59,8 +59,15 @@ RUN mkdir -p edms_root/endpoints/reports \
              edms_root/repo \
              edms_data
 
-RUN mkdir -p /edms_root && useradd -m appuser && chown -R appuser /app /edms_root
-USER appuser
+RUN mkdir -p /edms_root
+
+# Runs as root deliberately. This image is a locally-run dev/eval tool
+# distributed for people to `docker compose up` on any machine — with a
+# non-root user, a bind-mounted host directory (./webserver/data) stays
+# owned by whatever UID the host created it as, and the container user
+# can't write to it, so SQLite fails with CannotOpen. That broke the
+# team's runs on Linux (2026-09-10). Root sidesteps the UID-mismatch
+# entirely; proper privilege-drop is a separate hardening task.
 
 EXPOSE 3000
 CMD ["./rust-webserver"]
