@@ -55,19 +55,118 @@ use handlers::{
     },
 };
 
+/// Resolves the EDMS storage root, per Ravi (2026-09-14): one single point
+/// of configuration, a relative path, and the app never creates the
+/// top-level directory itself — the user has to. Priority:
+///
+/// 1. `EDMS_ROOT` env var — an explicit override (this is what
+///    docker-compose sets); always trusted as-is, no existence/location
+///    checks, since it's already an explicit deployment decision.
+/// 2. `config.yaml`'s `storage.root` — a relative path, resolved against
+///    the process's working directory. Rejected (falls through to #3) if
+///    it resolves inside this repo or the `init/` folder, or if the
+///    directory doesn't exist yet.
+/// 3. Neither — the old walk-up default, flagged unconfigured.
+///
+/// Returns `(root, configured)`. `configured = false` means: still
+/// running (never hard-blocks), but the frontend should show a warning —
+/// see `storage_configured` on `AppState`, surfaced via `/dashboard/static`.
+fn resolve_storage_root(config: &config::AppConfig) -> (std::path::PathBuf, bool) {
+    if let Ok(env_root) = std::env::var("EDMS_ROOT") {
+        return (std::path::PathBuf::from(env_root), true);
+    }
+
+    if let Some(rel) = config.storage.root.as_deref().filter(|s| !s.trim().is_empty()) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        // `Path::join` is purely lexical — it does NOT resolve `..`
+        // components, so ".../webserver/../../../foo" would otherwise
+        // still lexically "start with" the repo root even though it
+        // points outside it. Normalize before any containment check.
+        // Can't use `canonicalize()` here — the directory usually doesn't
+        // exist yet (that's the whole point of this check).
+        let resolved = normalize_lexically(&cwd.join(rel));
+
+        let inside_init = resolved
+            .components()
+            .any(|c| c.as_os_str() == std::ffi::OsStr::new("init"));
+        let inside_repo = find_repo_root(&cwd)
+            .map(|repo_root| resolved.starts_with(&normalize_lexically(&repo_root)))
+            .unwrap_or(false);
+
+        if inside_init || inside_repo {
+            eprintln!(
+                "[storage] configured storage.root '{}' resolves inside the \
+                 repo/init directory — refusing to use it. Point it \
+                 somewhere outside the repo instead.",
+                resolved.display()
+            );
+        } else if !resolved.exists() {
+            eprintln!(
+                "[storage] configured storage.root '{}' does not exist yet — \
+                 create it, then restart. Running against a fallback \
+                 location until then.",
+                resolved.display()
+            );
+        } else {
+            return (resolved, true);
+        }
+    }
+
+    (compute::folder_manager::default_root_path(), false)
+}
+
+/// Lexically resolves `.`/`..` components without touching the
+/// filesystem (unlike `canonicalize()`, works on paths that don't exist
+/// yet). `..` past the root is just dropped, same as most shells.
+fn normalize_lexically(path: &std::path::Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Walks up from `start` looking for a `.git` directory, to detect when a
+/// configured storage path resolves inside this checkout.
+fn find_repo_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut dir = Some(start);
+    while let Some(d) = dir {
+        if d.join(".git").exists() {
+            return Some(d.to_path_buf());
+        }
+        dir = d.parent();
+    }
+    None
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Config loads first — storage-root resolution below depends on it.
+    let app_config = std::env::var("EDMS_CONFIG_PATH")
+        .unwrap_or_else(|_| "config.yaml".to_string());
+    let config = Arc::new(config::AppConfig::from_file_or_default(&app_config));
+
     //Folder structure
-    // EDMS_ROOT lets the deployment pin the storage root explicitly —
-    // needed under Docker, where default_root_path() (which walks up
-    // looking for a `compute` dir) resolves to `/edms_root` at runtime
-    // while the persistent volume may be mounted elsewhere. Falls back
-    // to the walk-up behavior for local `cargo run`.
-    let root = std::env::var("EDMS_ROOT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| compute::folder_manager::default_root_path());
-    println!("Initializing EDMS root at: {:?}", root);
-    
+    let (root, storage_configured) = resolve_storage_root(&config);
+    println!(
+        "Initializing EDMS root at: {:?} (configured: {})",
+        root, storage_configured
+    );
+    if !storage_configured {
+        eprintln!(
+            "[storage] WARNING: no valid storage.root configured — running \
+             against a fallback location. Set `storage.root` in {app_config} \
+             to a relative path outside this repo, create that directory \
+             yourself, then restart."
+        );
+    }
+
     compute::folder_manager::verify_and_init(&root)
         .expect("Failed to initialize system folders");
 
@@ -76,10 +175,6 @@ async fn main() -> anyhow::Result<()> {
         .with_target(false)
         .with_writer(move || log_writer.clone())
         .init();
-
-    let app_config = std::env::var("EDMS_CONFIG_PATH")
-        .unwrap_or_else(|_| "config.yaml".to_string());
-    let config = Arc::new(config::AppConfig::from_file_or_default(&app_config));
 
     let db_path = std::env::var("EDMS_DB_PATH").unwrap_or_else(|_| "edms.db".to_string());
 
@@ -109,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
         dashboard_conn,
         std::path::PathBuf::from(&db_path),
         root.clone(),
+        storage_configured,
         config,
     );
 
