@@ -94,6 +94,8 @@ The only way endpoint definitions currently enter the system — Import (below) 
 | GET | `/test-view/:endpoint_id/request/:request_number` | REST | Fetch a saved request body |
 | GET | `/test-view/:endpoint_id/response/:request_number` | REST | Fetch a saved response body |
 | GET | `/test-view/:endpoint_id/headers/:request_number` | REST | Fetch saved headers — body is `{"request_headers":{...},"response_headers":{...}}` |
+| GET | `/test-view/:endpoint_id/qps` | REST | Lists every QP pair (test run) saved for this endpoint, oldest first: `{"ok":true,"qps":[{"request_number","method","timestamp","status_code","response_time_ms"}]}`. `status_code`/`response_time_ms` are `null` if the response hasn't landed yet |
+| POST | `/test-view/:endpoint_id/qps/:request_number/delete` | REST | Deletes one QP pair — its `request_metadata`/`response_metadata` rows and the three saved JSON files (request/response/headers). 404 if it doesn't exist. Broadcasts `QpDeleted` on the shared WS channel (same one `/test-view/run` uses) so open views know to re-fetch the list above |
 | POST | `/test-view/history/clearall` | REST | Wipes all history |
 | POST | `/test-view/bookmark/clearall` | REST | Wipes the `active` bookmark set |
 
@@ -237,7 +239,7 @@ Same catalog pattern as Collections (register a name, list, per-view tag rollups
 - Bookmark actions don't validate that an endpoint exists before bookmarking it (Collections does).
 - No size limits enforced anywhere (Collections count, endpoints-per-list, History/Bookmarks caps).
 - Deleting an endpoint doesn't cascade — orphaned bookmarks, collection memberships, and history/request/response data can be left behind.
-- No query-param (QP) concept anywhere — an endpoint's URL is stored as one opaque string. No endpoint to add/count/select individual QPs yet; this is still being designed (see Ravi's 2026-09-07 email).
+- A QP (request/response pair — see Test View above) is generated automatically by every test run, not created/edited by hand. There's no route to edit a QP's saved request/response in place, only to list and delete.
 - Import (`/repo/:collection/:filename/import`) only extracts a zip to disk — it does not create/update endpoint, bookmark, or collection-membership DB rows from the imported files.
 - Webview/Repoview have no independent per-instance SQLite file yet (unlike Collections) and no endpoint-membership routes at all.
 - The session backup used by `/bookmarks/:collection/load` (`__session_backup__`) is a **single rolling slot, not per-collection**, by design (confirmed, 2026-09-08): load A, leave bookmarks unsaved, load B, load A again — A's unsaved bookmarks are gone, overwritten when B loaded. Only the most recent switch is protected.

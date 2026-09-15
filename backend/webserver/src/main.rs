@@ -34,9 +34,10 @@ use handlers::{
     repo::{export_collection, import_collection},
     tags::{add_tag, list_tags_for_endpoint, popular_tags, remove_tag},
     test_view::{
-        clear_bookmarks, clear_history, get_saved_headers, get_saved_request, get_saved_response,
-        save_bookmark, save_history, stop, ws_add_from_history_to_bookmark,
-        ws_delete_from_bookmark, ws_load_bookmarks, ws_load_endpoints, ws_load_history, ws_run,
+        clear_bookmarks, clear_history, delete_qp, get_saved_headers, get_saved_request,
+        get_saved_response, list_qps, save_bookmark, save_history, stop,
+        ws_add_from_history_to_bookmark, ws_delete_from_bookmark, ws_load_bookmarks,
+        ws_load_endpoints, ws_load_history, ws_run,
     },
     view::{home, list_view, test_view},
     view_catalog::{
@@ -257,6 +258,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/test-view/:endpoint_id/request/:request_number", get(get_saved_request))
         .route("/test-view/:endpoint_id/response/:request_number", get(get_saved_response))
         .route("/test-view/:endpoint_id/headers/:request_number", get(get_saved_headers))
+        .route("/test-view/:endpoint_id/qps", get(list_qps))
+        .route("/test-view/:endpoint_id/qps/:request_number/delete", post(delete_qp))
         .route("/test-view/history/clearall", post(clear_history))
         .route("/test-view/bookmark/clearall", post(clear_bookmarks))
         .route("/bookmarks/:collection/load", get(ws_load_collection))

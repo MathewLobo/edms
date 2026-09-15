@@ -760,3 +760,100 @@ pub async fn get_saved_headers(
 ) -> (StatusCode, Json<serde_json::Value>) {
     read_saved_file(&state, &endpoint_id, request_number, "headers").await
 }
+
+// ── QP list / delete ─────────────────────────────────────────────────
+//
+// A "QP" (request/response pair) is one test run against an endpoint —
+// already persisted automatically in request_metadata/response_metadata +
+// the three saved JSON files whenever a test runs (see run_test_impl
+// above). These two routes are the missing "access all of them" / "get
+// rid of one" pieces — everything else about a QP already existed.
+
+/// GET /test-view/{endpoint_id}/qps
+/// Lists every QP pair saved for this endpoint, oldest first.
+pub async fn list_qps(
+    State(state): State<AppState>,
+    Path(endpoint_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if let Err(e) = safe_id(&endpoint_id) {
+        return e;
+    }
+
+    let res = tokio::task::spawn_blocking({
+        let st = state.clone();
+        let eid = endpoint_id.clone();
+        move || db::list_qps_for_endpoint(&st.core, &st.queries, &eid)
+    })
+    .await;
+
+    match res {
+        Ok(Ok(qps)) => (StatusCode::OK, Json(json!({ "ok": true, "qps": qps }))),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": format!("{e:?}") })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": format!("{e:?}") })),
+        ),
+    }
+}
+
+/// POST /test-view/{endpoint_id}/qps/{request_number}/delete
+/// Deletes one QP pair's metadata rows and its three saved JSON files
+/// (request/response/headers). 404 if no such pair exists.
+pub async fn delete_qp(
+    State(state): State<AppState>,
+    Path((endpoint_id, request_number)): Path<(String, i32)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if let Err(e) = safe_id(&endpoint_id) {
+        return e;
+    }
+
+    let res = tokio::task::spawn_blocking({
+        let st = state.clone();
+        let eid = endpoint_id.clone();
+        move || db::delete_qp(&st.core, &st.queries, &eid, request_number)
+    })
+    .await;
+
+    let rows_affected = match res {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("{e:?}") })),
+            )
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("{e:?}") })),
+            )
+        }
+    };
+
+    if rows_affected == 0 {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "error": format!("no QP pair {endpoint_id}#{request_number}") })),
+        );
+    }
+
+    // Best-effort: the metadata rows are the source of truth this route
+    // deletes by, so a file that's already missing isn't an error.
+    let dir = state.endpoint_storage_dir(&endpoint_id);
+    for kind in ["request", "response", "headers"] {
+        let path = dir.join(format!("{endpoint_id}-{kind}-{request_number}.json"));
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    state
+        .emit(ServerEvent::QpDeleted {
+            endpoint_id,
+            request_number,
+        })
+        .await;
+
+    (StatusCode::OK, Json(json!({ "ok": true })))
+}

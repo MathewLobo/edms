@@ -120,6 +120,44 @@ pub fn insert_response_metadata(
     core.proc(q, &[&endpoint_id, &request_number, &file_path, &status_code, &response_time_ms])
 }
 
+/// A "QP" (request/response pair) — one test run's saved request+response,
+/// identified by `request_number`. `status_code`/`response_time_ms` are
+/// `None` when the response metadata hasn't landed yet (request written,
+/// call still in flight).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QpSummary {
+    pub request_number: i32,
+    pub method: Option<String>,
+    pub timestamp: Option<String>,
+    pub status_code: Option<i32>,
+    pub response_time_ms: Option<i32>,
+}
+
+pub fn list_qps_for_endpoint(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str) -> EdmsResult<Vec<QpSummary>> {
+    let q = queries.get_request_query("R8").ok_or(EdmsError::UnknownError)?;
+    core.cproc(q, &[&endpoint_id], |row| {
+        Ok(QpSummary {
+            request_number: row.get(0)?,
+            method: row.get(1)?,
+            timestamp: row.get(2)?,
+            status_code: row.get(3)?,
+            response_time_ms: row.get(4)?,
+        })
+    })
+}
+
+/// Deletes one QP pair's metadata rows (request_metadata + response_metadata).
+/// Caller is responsible for also removing the saved JSON files on disk.
+pub fn delete_qp(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str, request_number: i32) -> EdmsResult<usize> {
+    let rq = queries.get_request_query("R7").ok_or(EdmsError::UnknownError)?;
+    let req_rows = core.proc(rq, &[&endpoint_id, &request_number])?;
+
+    let resq = queries.get_response_query("RES8").ok_or(EdmsError::UnknownError)?;
+    let res_rows = core.proc(resq, &[&endpoint_id, &request_number])?;
+
+    Ok(req_rows + res_rows)
+}
+
 /* ---------------- history (queries.yaml) ---------------- */
 
 pub fn history_count(core: &EdmsCore, queries: &QueryMap) -> EdmsResult<usize> {

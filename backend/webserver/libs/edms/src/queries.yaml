@@ -55,6 +55,14 @@ requests:
     help: "Get next request number for an endpoint"
     query: "SELECT MAX(request_number) FROM request_metadata WHERE endpoint_id = ?"
 
+  R7:
+    help: "Delete request metadata for one QP pair"
+    query: "DELETE FROM request_metadata WHERE endpoint_id = ? AND request_number = ?"
+
+  R8:
+    help: "List QP pairs for an endpoint — request+response metadata joined, ordered by request number"
+    query: "SELECT r.request_number, r.method, r.timestamp, p.status_code, p.response_time_ms FROM request_metadata r LEFT JOIN response_metadata p ON p.endpoint_id = r.endpoint_id AND p.request_number = r.request_number WHERE r.endpoint_id = ? ORDER BY r.request_number"
+
 responses:
   RES1:
     help: "Insert response metadata"
@@ -83,6 +91,10 @@ responses:
   RES7:
     help: "Get responses by specific status code"
     query: "SELECT * FROM response_metadata WHERE status_code = ?"
+
+  RES8:
+    help: "Delete response metadata for one QP pair"
+    query: "DELETE FROM response_metadata WHERE endpoint_id = ? AND request_number = ?"
 
 tags:
   T1:
