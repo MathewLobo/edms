@@ -14,14 +14,14 @@ services:
     volumes:
       - ../backend/webserver/data:/app/data
       - webserver-data:/app/edms_data
-      # Bind-mounts YOUR chosen host directory (set in .env, see
-      # .env.example) to a fixed container path. Per Ravi (2026-09-14):
-      # the user has to explicitly choose and configure this — it's no
-      # longer a Docker-managed named volume nobody had to think about.
-      # The `:?` makes `docker compose up` refuse to start with a clear
-      # message if EDMS_HOST_PATH isn't set, rather than silently
-      # defaulting to something inside the repo.
-      - ${EDMS_HOST_PATH:?Set EDMS_HOST_PATH in init/.env to a directory outside this repo — copy init/.env.example to init/.env and fill it in. See init/README.md.}:/app/edms_root
+      # Where EDMS stores all its data on YOUR machine — plain YAML, no
+      # .env file (Ravi, 2026-09-15). Defaults to a folder next to this
+      # repo (../../edms-data), auto-created by Docker on first run — no
+      # manual mkdir needed — and directly visible on your PC, not hidden
+      # in a Docker volume. Want it somewhere else? Just edit the
+      # left-hand side below; whatever you set it to gets auto-created
+      # the same way.
+      - ../../edms-data:/app/edms_root
     environment:
       - RUST_LOG=info
       - EDMS_DB_PATH=/app/data/edms.db

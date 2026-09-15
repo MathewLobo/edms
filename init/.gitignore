@@ -1,3 +1,0 @@
-# Local-only — holds the user's real EDMS_HOST_PATH. Never commit this;
-# .env.example is the tracked template.
-.env

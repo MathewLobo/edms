@@ -1,40 +1,33 @@
 # Initialization for EDMS application
 
-This folder is the single entry point for running EDMS — clone the repo,
-follow the two steps below, and you get a working app with sample data
-already loaded.
+This folder is the single entry point for running EDMS — clone the repo
+and run one command.
 
-## 1. Configure your storage path (required)
-
-EDMS keeps all its data — collections, request/response history, everything
-under `storage/` — in a directory on your own machine, not inside this repo.
+## Run it
 
 ```bash
 cd init
-cp .env.example .env
-```
-
-Edit `.env` and set `EDMS_HOST_PATH` to a real directory **outside this
-repo**, then **create that directory yourself** (the app will not create
-it for you):
-
-```bash
-mkdir -p ../../edms-data   # example — anywhere outside the repo works
-```
-
-```
-# init/.env
-EDMS_HOST_PATH=../../edms-data
-```
-
-If you skip this, `docker compose up` will refuse to start and tell you
-exactly what to do.
-
-## 2. Run it
-
-```bash
 docker compose up --build
 ```
+
+That's it — nothing to configure first, no `.env` file.
+
+EDMS keeps all its data — collections, request/response history, everything
+under `storage/` — in a plain folder on your machine, not hidden inside a
+Docker volume: by default `../../edms-data`, a folder next to this repo.
+It's created automatically the first time you run this — you don't need
+to make it yourself.
+
+**Want your data somewhere else?** Open `docker-compose.yml`, find this
+line under `webserver: volumes:`, and change the left-hand side to your
+own path:
+
+```yaml
+- ../../edms-data:/app/edms_root
+```
+
+Whatever you set it to gets created automatically the same way — no
+manual folder setup either way.
 
 First run takes a few minutes (Rust release build). Once it's up:
 
@@ -54,5 +47,5 @@ docker compose down -v
 rm -rf ../backend/webserver/data
 ```
 
-Your `EDMS_HOST_PATH` directory (outside the repo) is untouched by this —
-delete it yourself if you want a truly clean slate.
+Your storage folder (`../../edms-data`, or wherever you pointed it) is
+untouched by this — delete it yourself if you want a truly clean slate.
