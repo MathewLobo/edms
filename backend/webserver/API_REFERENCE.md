@@ -119,10 +119,11 @@ Each collection is its own real file (`storage/collections/{name}.sqlite`), hold
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
-| POST | `/collections/create` | `{"name"}` | Creates the catalog row + the real file, empty |
-| GET | `/collections/list` | — | All collections |
-| GET | `/collections/:name` | — | One collection's catalog row; 404 if missing |
+| POST | `/collections/create` | `{"name","annotation"?}` | Creates the catalog row + the real file, empty. `annotation` is optional |
+| GET | `/collections/list` | — | All collections, each with `annotation` (`null` if unset) |
+| GET | `/collections/:name` | — | One collection's catalog row, including `annotation`; 404 if missing |
 | POST | `/collections/:name/rename` | `{"new_name"}` | Renames the catalog entry + moves the file; rejects a name collision cleanly, no data loss |
+| POST | `/collections/:name/annotation` | `{"annotation"}` | Sets/replaces the collection's annotation. 404 if the collection doesn't exist |
 | POST | `/collections/:name/delete` | — | Removes the catalog row + deletes the file |
 | POST | `/collections/:name/endpoints/remove` | `{"endpoint_id"}` | Direct removal stays available — removal doesn't carry the same "must be deliberately curated via testing" risk as addition |
 | GET | `/collections/:name/endpoints` | — | Lists members with `added_at` |

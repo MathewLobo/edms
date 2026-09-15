@@ -23,6 +23,8 @@ use crate::{db, state::AppState};
 #[derive(Debug, Deserialize)]
 pub struct RegisterViewRequest {
     pub name: String,
+    #[serde(default)]
+    pub annotation: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,7 +84,8 @@ async fn register_for(
         let state = state.clone();
         move || -> Result<usize, String> {
             let ops = open_catalog(&state)?;
-            ops.register(kind, &payload.name, None).map_err(|e| format!("{e:?}"))
+            ops.register(kind, &payload.name, None, payload.annotation.as_deref())
+                .map_err(|e| format!("{e:?}"))
         }
     })
     .await;
@@ -103,7 +106,7 @@ async fn register_for(
 async fn list_for(kind: ViewKind, state: AppState) -> (StatusCode, Json<serde_json::Value>) {
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
-        move || -> Result<Vec<(String, Option<String>, String)>, String> {
+        move || -> Result<Vec<(String, Option<String>, String, Option<String>)>, String> {
             let ops = open_catalog(&state)?;
             ops.list(kind).map_err(|e| format!("{e:?}"))
         }
@@ -115,8 +118,8 @@ async fn list_for(kind: ViewKind, state: AppState) -> (StatusCode, Json<serde_js
             StatusCode::OK,
             Json(json!({
                 "ok": true,
-                "items": rows.into_iter().map(|(name, file_path, created_at)| json!({
-                    "name": name, "file_path": file_path, "created_at": created_at
+                "items": rows.into_iter().map(|(name, file_path, created_at, annotation)| json!({
+                    "name": name, "file_path": file_path, "created_at": created_at, "annotation": annotation
                 })).collect::<Vec<_>>()
             })),
         ),
@@ -137,6 +140,7 @@ pub async fn create_collection_entry(
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
         let name = payload.name.clone();
+        let annotation = payload.annotation.clone();
         move || -> Result<(usize, String), String> {
             let path = collection_file_path(&state, &name);
 
@@ -146,7 +150,7 @@ pub async fn create_collection_entry(
 
             let catalog = open_catalog(&state)?;
             let inserted = catalog
-                .register(ViewKind::Collections, &name, Some(&path))
+                .register(ViewKind::Collections, &name, Some(&path), annotation.as_deref())
                 .map_err(|e| format!("{e:?}"))?;
             Ok((inserted, path))
         }
@@ -177,7 +181,7 @@ pub async fn get_collection_entry(
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
         let name = name.clone();
-        move || -> Result<Option<(String, Option<String>, String)>, String> {
+        move || -> Result<Option<(String, Option<String>, String, Option<String>)>, String> {
             let catalog = open_catalog(&state)?;
             catalog.get(ViewKind::Collections, &name).map_err(|e| format!("{e:?}"))
         }
@@ -185,15 +189,59 @@ pub async fn get_collection_entry(
     .await;
 
     match res {
-        Ok(Ok(Some((name, file_path, created_at)))) => (
+        Ok(Ok(Some((name, file_path, created_at, annotation)))) => (
             StatusCode::OK,
-            Json(json!({ "ok": true, "name": name, "file_path": file_path, "created_at": created_at })),
+            Json(json!({
+                "ok": true, "name": name, "file_path": file_path,
+                "created_at": created_at, "annotation": annotation
+            })),
         ),
         Ok(Ok(None)) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "ok": false, "error": format!("Collection '{name}' does not exist") })),
         ),
         Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AnnotateViewRequest {
+    pub annotation: String,
+}
+
+/// POST /collections/:name/annotation — sets a collection's annotation.
+pub async fn annotate_collection_entry(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(payload): Json<AnnotateViewRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let res = tokio::task::spawn_blocking({
+        let state = state.clone();
+        let name = name.clone();
+        let annotation = payload.annotation.clone();
+        move || -> Result<usize, String> {
+            let catalog = open_catalog(&state)?;
+            if catalog
+                .get(ViewKind::Collections, &name)
+                .map_err(|e| format!("{e:?}"))?
+                .is_none()
+            {
+                return Err(format!("Collection '{name}' does not exist"));
+            }
+            catalog
+                .annotate(ViewKind::Collections, &name, &annotation)
+                .map_err(|e| format!("{e:?}"))
+        }
+    })
+    .await;
+
+    match res {
+        Ok(Ok(rows)) => (StatusCode::OK, Json(json!({ "ok": true, "updated_rows": rows }))),
+        Ok(Err(e)) => (StatusCode::NOT_FOUND, Json(json!({ "ok": false, "error": e }))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "ok": false, "error": e.to_string() })),
@@ -298,7 +346,7 @@ pub async fn delete_collection_entry(
                 .map_err(|e| format!("{e:?}"))?;
 
             let mut file_deleted = false;
-            if let Some((_, Some(file_path), _)) = existing {
+            if let Some((_, Some(file_path), _, _)) = existing {
                 if std::path::Path::new(&file_path).exists() {
                     std::fs::remove_file(&file_path).map_err(|e| e.to_string())?;
                     file_deleted = true;

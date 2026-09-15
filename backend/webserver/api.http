@@ -171,16 +171,24 @@ POST {{baseUrl}}/bookmarks/active/get-user-profile/unsave
 # (file_path on the catalog entry stays null until that exists).
 
 ### Register a new collection in the catalog
+# "annotation" is optional.
 POST {{baseUrl}}/collections/create
 Content-Type: application/json
 
-{ "name": "auth-suite" }
+{ "name": "auth-suite", "annotation": "Auth regression suite" }
 
 ### List registered collections
+# Each entry includes "annotation" (null if unset).
 GET {{baseUrl}}/collections/list
 
 ### Get one collection's catalog entry
 GET {{baseUrl}}/collections/auth-suite
+
+### Set/replace a collection's annotation
+POST {{baseUrl}}/collections/auth-suite/annotation
+Content-Type: application/json
+
+{ "annotation": "Auth regression suite — updated" }
 
 ### Rename a collection — moves its file on disk to match, too
 POST {{baseUrl}}/collections/auth-suite/rename

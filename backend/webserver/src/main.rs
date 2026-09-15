@@ -41,7 +41,7 @@ use handlers::{
     },
     view::{home, list_view, test_view},
     view_catalog::{
-        create_collection_entry, create_repoview_entry,
+        annotate_collection_entry, create_collection_entry, create_repoview_entry,
         create_webview_entry, delete_collection_entry, get_collection_entry,
         list_collection_endpoints, list_collections, list_repoviews, list_webviews,
         remove_endpoint_from_collection, rename_collection_entry,
@@ -279,6 +279,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/collections/list", get(list_collections))
         .route("/collections/:name", get(get_collection_entry))
         .route("/collections/:name/rename", post(rename_collection_entry))
+        .route("/collections/:name/annotation", post(annotate_collection_entry))
         .route("/collections/:name/delete", post(delete_collection_entry))
         .route("/collections/:name/endpoints/remove", post(remove_endpoint_from_collection))
         .route("/collections/:name/endpoints", get(list_collection_endpoints))

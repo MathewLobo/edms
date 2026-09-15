@@ -231,11 +231,25 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
                     file_path TEXT,
+                    annotation TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )"
             ),
             [],
         )?;
+
+        // Migration: DBs created before `annotation` existed won't have
+        // picked it up from CREATE TABLE IF NOT EXISTS above (a no-op on an
+        // existing table) — add it explicitly if missing, same pattern as
+        // endpoints.method above. Safe to run every startup.
+        let has_annotation: i64 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = 'annotation'"),
+            [],
+            |row| row.get(0),
+        )?;
+        if has_annotation == 0 {
+            conn.execute(&format!("ALTER TABLE {table} ADD COLUMN annotation TEXT"), [])?;
+        }
     }
 
     // Central tag-count rollups, one table per view type — a simple
