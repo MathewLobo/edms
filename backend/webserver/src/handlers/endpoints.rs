@@ -1,7 +1,9 @@
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::db::{self, EndpointDto};
+use crate::events::ServerEvent;
 use crate::state::AppState;
 
 const VALID_METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
@@ -234,4 +236,45 @@ pub async fn delete_endpoint(
             }),
         ),
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAnnotationRequest {
+    pub annotation: String,
+}
+
+/// POST /endpoints/{endpoint_id}/annotation — sets/replaces an endpoint's
+/// annotation after creation. Annotation was previously create-time-only:
+/// this is the first route to touch it afterward (db::update_annotation
+/// already existed, unused, since before this route was added).
+pub async fn update_endpoint_annotation(
+    State(state): State<AppState>,
+    Path(endpoint_id): Path<String>,
+    Json(payload): Json<UpdateAnnotationRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let rows = match db::update_annotation(&state.core, &state.queries, &endpoint_id, &payload.annotation) {
+        Ok(rows) => rows,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("{e:?}") })),
+            )
+        }
+    };
+
+    if rows == 0 {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "error": format!("Endpoint '{endpoint_id}' does not exist") })),
+        );
+    }
+
+    state.refresh_dashboard_snapshot();
+    state
+        .emit(ServerEvent::EndpointAnnotationUpdated {
+            endpoint_id: endpoint_id.clone(),
+        })
+        .await;
+
+    (StatusCode::OK, Json(json!({ "ok": true })))
 }

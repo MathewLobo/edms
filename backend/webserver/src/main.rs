@@ -29,7 +29,7 @@ use handlers::{
         get_dashboard_snapshot_history, get_static_data, refresh_crud_operations,
     },
     dataview::{dashboard, delete_folder, merge_folder, ws_make_folder_active},
-    endpoints::{create_endpoint, delete_endpoint},
+    endpoints::{create_endpoint, delete_endpoint, update_endpoint_annotation},
     logs::get_logs,
     repo::{export_collection, import_collection},
     tags::{add_tag, list_tags_for_endpoint, popular_tags, remove_tag},
@@ -244,6 +244,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/home", get(home))
         .route("/endpoints/create", post(create_endpoint))
         .route("/endpoints/:endpoint_id/delete", post(delete_endpoint))
+        .route("/endpoints/:endpoint_id/annotation", post(update_endpoint_annotation))
         .route("/test-view", get(test_view))
         .route("/list-view", get(list_view))
         .route("/test-view/endpoints/load", get(ws_load_endpoints))

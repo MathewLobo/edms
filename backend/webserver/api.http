@@ -43,6 +43,14 @@ Content-Type: application/json
 # Side effect: same dashboard snapshot refresh as create, on success.
 POST {{baseUrl}}/endpoints/get-user-profile/delete
 
+### Set/replace an endpoint's annotation after creation
+# 404 if the endpoint doesn't exist. Side effects: dashboard snapshot
+# refresh + broadcasts EndpointAnnotationUpdated on the shared WS channel.
+POST {{baseUrl}}/endpoints/get-user-profile/annotation
+Content-Type: application/json
+
+{ "annotation": "Updated: now paginated" }
+
 # ============================================================
 # Test View
 # ============================================================
