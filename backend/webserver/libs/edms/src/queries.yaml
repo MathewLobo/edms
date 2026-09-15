@@ -187,6 +187,10 @@ bookmarks:
     help: "Check whether an endpoint already exists in a collection (dedup guard for merge/create)"
     query: "SELECT COUNT(*) FROM bookmarks WHERE endpoint_id = ? AND folder = ?"
 
+  B10:
+    help: "List endpoint IDs + when they were bookmarked, for a specific folder, ordered by time"
+    query: "SELECT endpoint_id, timestamp FROM bookmarks WHERE folder = ? ORDER BY timestamp DESC"
+
 # Catalog tables: which collections/webviews/repoviews exist and where their
 # independent SQLite file lives (per Ravi, 2026-08-25).
 catalog:

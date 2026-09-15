@@ -498,8 +498,12 @@ async fn handle_ws_subscribe_bookmarks(mut socket: WebSocket, state: AppState) {
         let st = state.clone();
         let active_collection = active_collection.clone();
         move || {
-            let ids = db::list_bookmarked_endpoints_active(&st.core, &st.queries)?;
+            let ids_with_timestamps =
+                db::list_bookmarked_endpoints_active_with_timestamps(&st.core, &st.queries)?;
+            let ids: Vec<String> = ids_with_timestamps.iter().map(|(id, _)| id.clone()).collect();
             let endpoints = db::endpoints_for_ids(&st.core, &st.queries, &ids)?;
+            let updated_at: std::collections::HashMap<String, String> =
+                ids_with_timestamps.into_iter().collect();
 
             let member_set = match &active_collection {
                 Some(name) => {
@@ -513,12 +517,12 @@ async fn handle_ws_subscribe_bookmarks(mut socket: WebSocket, state: AppState) {
                 None => std::collections::HashSet::new(),
             };
 
-            Ok::<_, EdmsError>((endpoints, member_set))
+            Ok::<_, EdmsError>((endpoints, member_set, updated_at))
         }
     })
     .await;
 
-    if let Ok(Ok((bks, member_set))) = bookmarks {
+    if let Ok(Ok((bks, member_set, updated_at))) = bookmarks {
         let enriched: Vec<Value> = bks
             .iter()
             .map(|ep| {
@@ -527,6 +531,14 @@ async fn handle_ws_subscribe_bookmarks(mut socket: WebSocket, state: AppState) {
                     obj.insert(
                         "in_collection".to_string(),
                         Value::Bool(member_set.contains(&ep.endpoint_id)),
+                    );
+                    obj.insert(
+                        "updated".to_string(),
+                        updated_at
+                            .get(&ep.endpoint_id)
+                            .cloned()
+                            .map(Value::String)
+                            .unwrap_or(Value::Null),
                     );
                 }
                 v

@@ -181,19 +181,27 @@ pub async fn get_collection_entry(
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
         let name = name.clone();
-        move || -> Result<Option<(String, Option<String>, String, Option<String>)>, String> {
+        move || -> Result<Option<(String, Option<String>, String, Option<String>, Option<i64>)>, String> {
             let catalog = open_catalog(&state)?;
-            catalog.get(ViewKind::Collections, &name).map_err(|e| format!("{e:?}"))
+            let row = catalog.get(ViewKind::Collections, &name).map_err(|e| format!("{e:?}"))?;
+            Ok(row.map(|(name, file_path, created_at, annotation)| {
+                let count = file_path
+                    .as_deref()
+                    .and_then(|p| open_membership(p).ok())
+                    .and_then(|m| m.count().ok());
+                (name, file_path, created_at, annotation, count)
+            }))
         }
     })
     .await;
 
     match res {
-        Ok(Ok(Some((name, file_path, created_at, annotation)))) => (
+        Ok(Ok(Some((name, file_path, created_at, annotation, endpoint_count)))) => (
             StatusCode::OK,
             Json(json!({
                 "ok": true, "name": name, "file_path": file_path,
-                "created_at": created_at, "annotation": annotation
+                "created_at": created_at, "annotation": annotation,
+                "endpoint_count": endpoint_count
             })),
         ),
         Ok(Ok(None)) => (
@@ -443,8 +451,47 @@ pub async fn list_collection_endpoints(
     }
 }
 
+/// GET /collections/list — like the generic `list_for`, but also folds in
+/// each collection's `endpoint_count` (from its own membership file —
+/// `CollectionMembershipOps::count()` already existed, just unused here).
+/// `null` if the collection has no file yet.
 pub async fn list_collections(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
-    list_for(ViewKind::Collections, state).await
+    let res = tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || -> Result<Vec<(String, Option<String>, String, Option<String>, Option<i64>)>, String> {
+            let catalog = open_catalog(&state)?;
+            let rows = catalog.list(ViewKind::Collections).map_err(|e| format!("{e:?}"))?;
+            Ok(rows
+                .into_iter()
+                .map(|(name, file_path, created_at, annotation)| {
+                    let count = file_path
+                        .as_deref()
+                        .and_then(|p| open_membership(p).ok())
+                        .and_then(|m| m.count().ok());
+                    (name, file_path, created_at, annotation, count)
+                })
+                .collect())
+        }
+    })
+    .await;
+
+    match res {
+        Ok(Ok(rows)) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "items": rows.into_iter().map(|(name, file_path, created_at, annotation, endpoint_count)| json!({
+                    "name": name, "file_path": file_path, "created_at": created_at,
+                    "annotation": annotation, "endpoint_count": endpoint_count
+                })).collect::<Vec<_>>()
+            })),
+        ),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        ),
+    }
 }
 
 pub async fn create_webview_entry(

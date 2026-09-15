@@ -231,6 +231,18 @@ pub fn list_bookmarked_endpoints_active(core: &EdmsCore, queries: &QueryMap) -> 
     core.cproc(q, &[&ACTIVE_FOLDER], |row| row.get(0))
 }
 
+/// Same as `list_bookmarked_endpoints_active`, but also carries when each
+/// one was bookmarked — the "updated" field bookmark-view consumers expect
+/// (previously always null: it was tracked in the `bookmarks` table the
+/// whole time, just never selected past this query).
+pub fn list_bookmarked_endpoints_active_with_timestamps(
+    core: &EdmsCore,
+    queries: &QueryMap,
+) -> EdmsResult<Vec<(String, String)>> {
+    let q = queries.get_bookmark_query("B10").ok_or(EdmsError::UnknownError)?;
+    core.cproc(q, &[&ACTIVE_FOLDER], |row| Ok((row.get(0)?, row.get(1)?)))
+}
+
 /// Bookmark an endpoint into an arbitrary folder (not just `active`).
 /// Used by any caller that has a real target folder in hand — e.g. from a
 /// URL path param — rather than always meaning the working set.
