@@ -348,6 +348,17 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
             |row| row.get(0),
         )?;
         if has_cat_id > 0 {
+            // A DB this old may predate the annotation column too (id
+            // present, no annotation yet) — SELECT-ing a column that
+            // doesn't exist would abort startup, so check first and fall
+            // back to NULL rather than assuming it's there.
+            let has_annotation_pre_rebuild: i64 = conn.query_row(
+                &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = 'annotation'"),
+                [],
+                |row| row.get(0),
+            )?;
+            let annotation_select = if has_annotation_pre_rebuild > 0 { "annotation" } else { "NULL" };
+
             conn.execute(
                 &format!(
                     "CREATE TABLE {table}_new (
@@ -360,7 +371,7 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
                 [],
             )?;
             conn.execute(
-                &format!("INSERT OR IGNORE INTO {table}_new (name, file_path, annotation, created_at) SELECT name, file_path, annotation, created_at FROM {table}"),
+                &format!("INSERT OR IGNORE INTO {table}_new (name, file_path, annotation, created_at) SELECT name, file_path, {annotation_select}, created_at FROM {table}"),
                 [],
             )?;
             conn.execute(&format!("DROP TABLE {table}"), [])?;
