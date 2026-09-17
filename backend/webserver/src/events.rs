@@ -45,4 +45,24 @@ pub enum ServerEvent {
     QpDeleted { endpoint_id: String, request_number: i32 },
 
     EndpointAnnotationUpdated { endpoint_id: String },
+
+    ViewRefresh { view_type: String, count: usize },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_view_refresh_event_serialization() {
+        let event = ServerEvent::ViewRefresh {
+            view_type: "Bookmark".to_string(),
+            count: 3,
+        };
+        let serialized = serde_json::to_string(&event).unwrap();
+        assert!(serialized.contains(r#""type":"ViewRefresh""#));
+        assert!(serialized.contains(r#""view_type":"Bookmark""#));
+        assert!(serialized.contains(r#""count":3"#));
+    }
+}
+
