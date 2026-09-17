@@ -74,6 +74,29 @@ pub fn get_endpoint(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str) -> E
     Ok(rows.into_iter().next())
 }
 
+/// Looks up an endpoint by its exact (endpoint_str, method) pair — lets a
+/// caller check "does this already exist" before deciding whether to pass
+/// an existing endpoint_id vs. let a fresh one get allocated. Uniqueness is
+/// scoped to (endpoint_str, method), matching idx_endpoints_str_method —
+/// GET and POST against the same URL are legitimately different endpoints.
+pub fn find_endpoint_by_str_and_method(
+    core: &EdmsCore,
+    queries: &QueryMap,
+    endpoint_str: &str,
+    method: &str,
+) -> EdmsResult<Option<EndpointDto>> {
+    let q = queries.get_endpoint_query("E8").ok_or(EdmsError::UnknownError)?;
+    let rows = core.cproc(q, &[&endpoint_str, &method], |row| {
+        Ok(EndpointDto {
+            endpoint_id: row.get(0)?,
+            endpoint_str: row.get(1)?,
+            annotation: row.get(2)?,
+            method: row.get(3)?,
+        })
+    })?;
+    Ok(rows.into_iter().next())
+}
+
 pub fn update_annotation(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str, annotation: &str) -> EdmsResult<usize> {
     let q = queries.get_endpoint_query("E4").ok_or(EdmsError::UnknownError)?;
     core.proc(q, &[&annotation, &endpoint_id])

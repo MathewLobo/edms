@@ -51,6 +51,11 @@ Content-Type: application/json
 
 { "annotation": "Updated: now paginated" }
 
+### Look up an endpoint by exact (endpoint_str, method) — dedup check
+# before running a test, so a re-tested URL reuses its endpoint_id
+# instead of a new one getting allocated. 404 if none exists.
+GET {{baseUrl}}/endpoints/lookup?endpoint_str=https%3A%2F%2Fapi.example.com%2Fusers%2F%7Bid%7D&method=GET
+
 # ============================================================
 # Test View
 # ============================================================
@@ -211,6 +216,17 @@ POST {{baseUrl}}/collections/auth-suite-v2/delete
 
 ### List endpoints that belong to a collection
 GET {{baseUrl}}/collections/auth-suite/endpoints
+
+### Add to Collection — find every endpoint carrying any of these tags,
+# add them as members, and optionally copy their current tags in too.
+# Central tags table is read-only here, never modified.
+POST {{baseUrl}}/collections/auth-suite/tags/import
+Content-Type: application/json
+
+{ "tags": ["smoke", "critical"], "export_existing_tags": true }
+
+### List (endpoint_id, tag) pairs this collection carries from the import above
+GET {{baseUrl}}/collections/auth-suite/tags/endpoints
 
 ### Remove an endpoint from a collection
 POST {{baseUrl}}/collections/auth-suite/endpoints/remove

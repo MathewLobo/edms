@@ -29,7 +29,7 @@ use handlers::{
         get_dashboard_snapshot_history, get_static_data, refresh_crud_operations,
     },
     dataview::{dashboard, delete_folder, merge_folder, ws_make_folder_active},
-    endpoints::{create_endpoint, delete_endpoint, update_endpoint_annotation},
+    endpoints::{create_endpoint, delete_endpoint, lookup_endpoint, update_endpoint_annotation},
     logs::get_logs,
     repo::{export_collection, import_collection},
     tags::{add_tag, list_tags_for_endpoint, popular_tags, remove_tag},
@@ -43,8 +43,9 @@ use handlers::{
     view_catalog::{
         annotate_collection_entry, create_collection_entry, create_repoview_entry,
         create_webview_entry, delete_collection_entry, get_collection_entry,
-        list_collection_endpoints, list_collections, list_repoviews, list_webviews,
-        remove_endpoint_from_collection, rename_collection_entry,
+        import_tags_into_collection, list_collection_endpoint_tags, list_collection_endpoints,
+        list_collections, list_repoviews, list_webviews, remove_endpoint_from_collection,
+        rename_collection_entry,
     },
     view_tags::{
         create_collections_tag, create_repoview_tag, create_webview_tag, delete_collections_tags,
@@ -243,6 +244,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/home", get(home))
         .route("/endpoints/create", post(create_endpoint))
+        .route("/endpoints/lookup", get(lookup_endpoint))
         .route("/endpoints/:endpoint_id/delete", post(delete_endpoint))
         .route("/endpoints/:endpoint_id/annotation", post(update_endpoint_annotation))
         .route("/test-view", get(test_view))
@@ -284,6 +286,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/collections/:name/delete", post(delete_collection_entry))
         .route("/collections/:name/endpoints/remove", post(remove_endpoint_from_collection))
         .route("/collections/:name/endpoints", get(list_collection_endpoints))
+        .route("/collections/:name/tags/import", post(import_tags_into_collection))
+        .route("/collections/:name/tags/endpoints", get(list_collection_endpoint_tags))
         .route("/collections/tags/create", post(create_collections_tag))
         .route("/collections/tags/delete", post(delete_collections_tags))
         .route("/collections/tags/rename", post(rename_collections_tag))

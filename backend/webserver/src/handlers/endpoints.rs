@@ -1,4 +1,8 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -234,6 +238,51 @@ pub async fn delete_endpoint(
                 message: format!("Failed to delete endpoint: {e:?}"),
                 endpoint_id: None,
             }),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LookupEndpointQuery {
+    pub endpoint_str: String,
+    pub method: String,
+}
+
+/// GET /endpoints/lookup?endpoint_str=...&method=...
+///
+/// Lets a caller check whether an endpoint already exists for this exact
+/// (endpoint_str, method) pair before running a test — the fix for
+/// endpoints silently getting duplicated when the frontend's own
+/// in-memory matching fails to recognize a re-tested URL as the same
+/// endpoint. 404 (not an error) if none exists yet.
+pub async fn lookup_endpoint(
+    State(state): State<AppState>,
+    Query(params): Query<LookupEndpointQuery>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let method = match validate_method(Some(&params.method)) {
+        Ok(m) => m.unwrap_or_default(),
+        Err(message) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": message }))),
+    };
+
+    let res = tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || db::find_endpoint_by_str_and_method(&state.core, &state.queries, &params.endpoint_str, &method)
+    })
+    .await;
+
+    match res {
+        Ok(Ok(Some(ep))) => (StatusCode::OK, Json(json!({ "ok": true, "endpoint": ep }))),
+        Ok(Ok(None)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "error": "no endpoint found for that (endpoint_str, method) pair" })),
+        ),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": format!("{e:?}") })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
         ),
     }
 }

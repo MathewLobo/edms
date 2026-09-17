@@ -14,9 +14,11 @@ use axum::{
     Json,
 };
 use edms::ops::collection_membership_ops::CollectionMembershipOps;
+use edms::ops::tag_ops::TagOps;
 use edms::ops::view_ops::{ViewCatalogOps, ViewKind};
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashSet;
 
 use crate::{db, state::AppState};
 
@@ -514,4 +516,122 @@ pub async fn create_repoview_entry(
 
 pub async fn list_repoviews(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
     list_for(ViewKind::Repoview, state).await
+}
+
+// ── Tag → Collection transfer ("Add to Collection") ─────────────────────
+//
+// The central `tags` table (TagOps) stays the single source of truth for
+// an endpoint's own tags, untouched by this — it's read-only here. This
+// only writes to the destination collection's own file: adds the matched
+// endpoints as members, and — if requested — copies each one's current
+// tags into that collection's endpoint_tags table (a separate, per-
+// collection record, not a move out of the central table).
+
+const MAX_TAGS_PER_ENDPOINT: i64 = 25;
+
+#[derive(Debug, Deserialize)]
+pub struct ImportTagsRequest {
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub export_existing_tags: bool,
+}
+
+/// POST /collections/:name/tags/import
+pub async fn import_tags_into_collection(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(payload): Json<ImportTagsRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let res = tokio::task::spawn_blocking({
+        let state = state.clone();
+        let name = name.clone();
+        move || -> Result<serde_json::Value, String> {
+            let membership = open_existing_collection_membership(&state, &name)?;
+
+            let tag_ops = TagOps::new(&state.db_path.display().to_string());
+            tag_ops.initialize().map_err(|e| format!("{e:?}"))?;
+
+            let mut endpoint_ids: HashSet<String> = HashSet::new();
+            for tag in &payload.tags {
+                let ids = tag_ops.get_endpoints_by_tag(tag).map_err(|e| format!("{e:?}"))?;
+                endpoint_ids.extend(ids);
+            }
+            let endpoint_ids: Vec<String> = endpoint_ids.into_iter().collect();
+
+            let added_members = membership.add_batch(&endpoint_ids).map_err(|e| format!("{e:?}"))?;
+
+            let mut tags_exported = 0usize;
+            let mut tags_skipped_cap = 0usize;
+            if payload.export_existing_tags {
+                for eid in &endpoint_ids {
+                    let existing_tags = tag_ops.get_by_endpoint(eid).map_err(|e| format!("{e:?}"))?;
+                    let mut current_count = membership.count_tags_for_endpoint(eid).map_err(|e| format!("{e:?}"))?;
+                    for tag in existing_tags {
+                        if current_count >= MAX_TAGS_PER_ENDPOINT {
+                            tags_skipped_cap += 1;
+                            continue;
+                        }
+                        let inserted = membership.add_tag(eid, &tag).map_err(|e| format!("{e:?}"))?;
+                        if inserted > 0 {
+                            tags_exported += 1;
+                            current_count += 1;
+                        }
+                    }
+                }
+            }
+
+            Ok(json!({
+                "ok": true,
+                "endpoints_matched": endpoint_ids.len(),
+                "endpoints_added": added_members,
+                "tags_exported": tags_exported,
+                "tags_skipped_cap": tags_skipped_cap
+            }))
+        }
+    })
+    .await;
+
+    match res {
+        Ok(Ok(body)) => (StatusCode::OK, Json(body)),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        ),
+    }
+}
+
+/// GET /collections/:name/tags/endpoints — list every (endpoint_id, tag)
+/// pair this collection carries (from the import route above — separate
+/// from the central tags table).
+pub async fn list_collection_endpoint_tags(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let res = tokio::task::spawn_blocking({
+        let state = state.clone();
+        let name = name.clone();
+        move || -> Result<Vec<(String, String)>, String> {
+            let membership = open_existing_collection_membership(&state, &name)?;
+            membership.list_all_endpoint_tags().map_err(|e| format!("{e:?}"))
+        }
+    })
+    .await;
+
+    match res {
+        Ok(Ok(pairs)) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "tags": pairs.into_iter().map(|(endpoint_id, tag)| json!({
+                    "endpoint_id": endpoint_id, "tag": tag
+                })).collect::<Vec<_>>()
+            })),
+        ),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        ),
+    }
 }
