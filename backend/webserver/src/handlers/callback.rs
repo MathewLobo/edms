@@ -44,6 +44,9 @@ pub async fn ipc_callback(
         "export_merge"             => handle_export_merge(&state, &callback).await,
         "mark_active_folder"       => handle_mark_active_folder(&state, &callback).await,
         "compute_crud_operations"  => handle_compute_crud_operations(&state, &callback).await,
+        "convert_to_pdf" | "convert_to_html" | "convert_to_markdown" => {
+            handle_file_conversion(&state, &callback).await
+        }
         _ => {
             info!(
                 "[callback] task='{}' completed — no specific handler",
@@ -72,6 +75,19 @@ pub async fn ipc_callback(
     }
 
     Json(json!({ "status": "received" }))
+}
+
+async fn handle_file_conversion(state: &AppState, callback: &IpcCallback) {
+    let output_path = callback.result["output_path"]
+        .as_str()
+        .unwrap_or("unknown output path");
+    info!(
+        "[callback] {} wrote report to {}",
+        callback.task, output_path
+    );
+    let _ = state.events_tx.send(ServerEvent::ExportReady {
+        message: format!("EQP report ready: {output_path}"),
+    });
 }
 
 // ── run_test ─────────────────────────────────────────────────────────────────

@@ -12,9 +12,10 @@ use std::time::Instant;
 // Re-use all the handler inner functions and request types
 use compute::api::handlers::{
     BookmarkRequest, CrudOperationsRequest, EndpointWriteRequest, ExportCollectionRequest,
-    ExportMergeRequest, HeadersDoc, ImportZipRequest, MarkActiveFolderRequest, MarkdownRequest, MetaRequest,
-    RequestDoc, ResponseDoc, RunTestRequest, StaticCreateRequest, StaticExportRequest,
-    compute_crud_operations_inner, create_static_inner, export_bookmarks_inner,
+    ExportMergeRequest, FileConversionRequest, HeadersDoc, ImportZipRequest,
+    MarkActiveFolderRequest, MarkdownRequest, MetaRequest, RequestDoc, ResponseDoc, RunTestRequest,
+    StaticCreateRequest, StaticExportRequest, compute_crud_operations_inner, convert_to_html_inner,
+    convert_to_markdown_inner, convert_to_pdf_inner, create_static_inner, export_bookmarks_inner,
     export_collection_inner, export_merge_inner, export_static_inner, generate_markdown_inner,
     generate_meta_inner, import_zip_inner, mark_active_folder_inner, run_test_inner,
     write_endpoint_inner, write_headers_inner, write_request_inner, write_response_inner,
@@ -71,7 +72,11 @@ async fn main() {
 
     // --- FIX STARTS HERE ---
     // 1. Get the absolute path to ensure we are in the right spot
-    let root = compute::folder_manager::default_root_path();
+    // Match the parent webserver's Docker storage configuration. Falling
+    // back keeps the child usable in local, non-Docker development.
+    let root = std::env::var_os("EDMS_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(compute::folder_manager::default_root_path);
     eprintln!("[DEBUG] Using root path: {:?}", root);
     // 2. Force create the base structure
     compute::folder_manager::verify_and_init(&root).expect("Init failed");
@@ -149,6 +154,21 @@ async fn dispatch(task: &str, payload: Value) -> (bool, Value, Option<String>) {
         "create_static" => run(payload, |p: StaticCreateRequest| create_static_inner(p)).await,
 
         "export_static" => run(payload, |p: StaticExportRequest| export_static_inner(p)).await,
+
+        // File-conversion recipe: deserialize the three-field payload, call the
+        // matching compute function, then send its output_path in the callback.
+        "convert_to_pdf" => run(payload, |p: FileConversionRequest| convert_to_pdf_inner(p)).await,
+
+        "convert_to_html" => {
+            run(payload, |p: FileConversionRequest| convert_to_html_inner(p)).await
+        }
+
+        "convert_to_markdown" => {
+            run(payload, |p: FileConversionRequest| {
+                convert_to_markdown_inner(p)
+            })
+            .await
+        }
 
         "generate_markdown" => run(payload, |p: MarkdownRequest| generate_markdown_inner(p)).await,
 

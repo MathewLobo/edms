@@ -11,3 +11,4 @@ pub mod validate;
 pub mod table_view;
 #[allow(non_snake_case)]
 pub mod audit_orphanedEIDs;
+pub mod file_converter;

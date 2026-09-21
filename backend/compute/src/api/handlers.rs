@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::{folder_manager, zipops};
+use crate::{file_converter, folder_manager, zipops};
 use crate::markdown_generator::{create_markdown, EndpointRecord};
 use crate::markdown_meta::create_markdown_meta;
 use crate::endpoint_writer;
@@ -147,6 +147,73 @@ pub async fn export_static(
     Json(payload): Json<StaticExportRequest>,
 ) -> Result<String, String> {
     export_static_inner(payload).await
+}
+
+// ── FILE CONVERSION ──────────────────────────────────────────────────────────
+
+/// The compute payload follows the contract used by the webserver:
+/// - `input_data`: the EQP JSON/text received by the webserver
+/// - `output_filename`: the user-selected report name
+/// - `output_filepath`: the takeout root containing MD/HTML/PDF directories
+#[derive(Deserialize)]
+pub struct FileConversionRequest {
+    pub input_data: String,
+    pub output_filename: String,
+    pub output_filepath: String,
+}
+
+pub async fn convert_to_pdf_inner(payload: FileConversionRequest) -> Result<String, String> {
+    let input_data = payload.input_data;
+    let output_filename = payload.output_filename;
+    let output_filepath = PathBuf::from(payload.output_filepath);
+
+    // PDF generation and file I/O are blocking work. Moving them off Tokio's
+    // async worker prevents a large document from delaying other requests.
+    let written_path = tokio::task::spawn_blocking(move || {
+        file_converter::convert_to_pdf(&input_data, &output_filename, output_filepath)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+
+    conversion_result(written_path)
+}
+
+pub async fn convert_to_html_inner(payload: FileConversionRequest) -> Result<String, String> {
+    let input_data = payload.input_data;
+    let output_filename = payload.output_filename;
+    let output_filepath = PathBuf::from(payload.output_filepath);
+    let written_path = tokio::task::spawn_blocking(move || {
+        file_converter::convert_to_html(&input_data, &output_filename, output_filepath)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+
+    conversion_result(written_path)
+}
+
+pub async fn convert_to_markdown_inner(payload: FileConversionRequest) -> Result<String, String> {
+    let input_data = payload.input_data;
+    let output_filename = payload.output_filename;
+    let output_filepath = PathBuf::from(payload.output_filepath);
+    let written_path = tokio::task::spawn_blocking(move || {
+        file_converter::convert_to_markdown(&input_data, &output_filename, output_filepath)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+
+    conversion_result(written_path)
+}
+
+/// Return JSON rather than a bare message so the webserver callback knows
+/// exactly which file the compute child produced.
+fn conversion_result(written_path: PathBuf) -> Result<String, String> {
+    serde_json::to_string(&serde_json::json!({
+        "output_path": written_path.to_string_lossy()
+    }))
+    .map_err(|error| error.to_string())
 }
 
 // ── MARKDOWN GENERATION ───────────────────────────────────────────────────────

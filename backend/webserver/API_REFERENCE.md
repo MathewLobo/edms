@@ -78,6 +78,12 @@ The only way endpoint definitions currently enter the system — Import (below) 
 | POST | `/endpoints/:endpoint_id/annotation` | `{"annotation"}` | Sets/replaces the endpoint's annotation after creation (previously create-time-only). 404 if the endpoint doesn't exist. Broadcasts `EndpointAnnotationUpdated` on the shared WS channel (same one `/test-view/run` uses) so open List/Test Views know to re-fetch |
 | GET | `/endpoints/lookup?endpoint_str=&method=` | — | Looks up an endpoint by its exact `(endpoint_str, method)` pair — lets a caller check "does this already exist" before deciding whether to pass an existing `endpoint_id` vs. let a fresh one get allocated. 404 if none exists |
 
+## EQP report export
+
+| Method | Path | Body | Notes |
+|---|---|---|---|
+| POST | `/reports/:endpoint_id/export` | `{"format":"pdf|html|md","output_filename"?}` | Reads the EID's request, response, and header JSON files from the configured `edms-data/storage/globalEQPData/` folder, combines them with endpoint metadata and tags, and sends the resulting payload to the compute converter. Returns `202 Accepted`; the timestamped file is written under `edms-data/takeout/PDF`, `HTML`, or `MD`. |
+
 ---
 
 ## Test View

@@ -1,0 +1,30 @@
+{
+  "eid": "E0001-AAA",
+  "crud": "POST",
+  "endpoint_string": "https://dummyjson.com/auth/login",
+  "tags": ["production"],
+  "qp_data": [
+    {
+      "request_number": 1,
+      "request": {},
+      "response": {
+        "message": "Username and password required"
+      },
+      "response_metadata": {
+        "status_code": 400,
+        "response_time_ms": 408
+      }
+    },
+    {
+      "request_number": 2,
+      "request": {},
+      "response": {
+        "message": "Username and password required"
+      },
+      "response_metadata": {
+        "status_code": 400,
+        "response_time_ms": 252
+      }
+    }
+  ]
+}
