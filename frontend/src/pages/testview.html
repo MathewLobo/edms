@@ -98,14 +98,28 @@
                 gap-0.5"
             >
 
-                <h1
-                    class="text-2xl
-                    font-bold
-                    tracking-tight
-                    text-white"
-                >
-                    TestView
-                </h1>
+                <div class="flex items-center gap-3">
+                    <h1
+                        class="text-2xl
+                        font-bold
+                        tracking-tight
+                        text-white"
+                    >
+                        TestView
+                    </h1>
+                    
+                    <div id="collectionContextBanner" class="hidden items-center gap-2">
+                        <span class="text-slate-600">/</span>
+                        <span class="text-[11px] text-slate-400">Collection:</span>
+                        <span id="collectionContextName" class="font-mono text-sm font-semibold text-cyan-400">—</span>
+                        <span id="collectionContextCount" class="rounded-md bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-400">— endpoints</span>
+                        <button id="clearCollectionFilter" type="button" class="ml-1 text-slate-500 hover:text-white" title="Clear filter">
+                            <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M6 6l12 12M18 6 6 18"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
 
                 <p
                     class="text-xs
@@ -157,19 +171,6 @@
                         Test View
 
                     </button>
-                    <!-- Bookmark View -->
-                    <button id="listnav" data-target="./listview.html" data-page="list" class="nav-button
-                                   rounded-lg
-                                   px-3.5 py-1.5
-                                   text-sm
-                                   font-medium
-                                   text-slate-400
-                                   transition
-                                   hover:bg-slate-700
-                                   hover:text-white">
-
-                        Bookmark View
-                    </button>
                     <!-- Collection View -->
                     <button id="collectionnav" data-target="./collection_view.html" data-page="collection" class="nav-button
                                    rounded-lg
@@ -215,6 +216,9 @@
                 </nav>
 
         </header>
+
+
+
 
 
         <!-- MAIN -->
@@ -368,22 +372,7 @@
                         </button>
 
 
-                        <button
-                            id="bookmarksTab"
-                            class="flex-1
-                            px-1.5
-                            h-full
-                            text-sm
-                            font-medium
-                            border-b-2
-                            border-transparent
-                            text-slate-400
-                            hover:text-white
-                            hover:border-sky-400/60
-                            transition-colors"
-                        >
-                            Bookmarks
-                        </button>
+
 
 
                         <button
@@ -1128,67 +1117,51 @@
                         shadow-cyan-500/20"
                     >
 
-                        <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            class="w-4 h-4"
-                        >
-                            <polygon
-                                points="6 3 20 12 6 21 6 3"
-                            ></polygon>
-                        </svg>
+                        <span id="runIconContainer" class="flex items-center">
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                class="w-4 h-4"
+                            >
+                                <polygon
+                                    points="6 3 20 12 6 21 6 3"
+                                ></polygon>
+                            </svg>
+                        </span>
 
-                        Run
-
-                    </button>
-
-
-                    <!-- STOP -->
-
-                    <button
-                        id="stopRequest"
-                        type="button"
-                        class="h-8
-                        shrink-0
-                        px-4
-                        flex
-                        items-center
-                        gap-1.5
-                        rounded-lg
-                        border
-                        border-red-500/40
-                        bg-transparent
-                        text-red-400
-                        font-semibold
-                        text-sm
-                        transition
-                        hover:bg-red-500/10
-                        active:scale-95"
-                    >
-
-                        <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 0 24 24"
-                            fill="currentColor"
-                            class="w-3.5 h-3.5"
-                        >
-                            <rect
-                                x="4"
-                                y="4"
-                                width="16"
-                                height="16"
-                                rx="2"
-                            ></rect>
-                        </svg>
-
-                        Stop
+                        <span id="runText">Run</span>
 
                     </button>
+
+
+                    <!-- SAVE -->
+
+                    <div class="relative" id="saveDropdownContainer">
+                        <button
+                            id="saveRequest"
+                            type="button"
+                            class="h-8 shrink-0 px-4 flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-transparent text-emerald-400 font-semibold text-sm transition hover:bg-emerald-500/10 active:scale-95"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                            Save
+                            <svg class="w-3 h-3 ml-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                        </button>
+
+                        <div id="saveMenu" class="hidden absolute right-0 top-full mt-1 w-48 z-50 rounded-lg border border-slate-700 bg-slate-900 shadow-2xl overflow-hidden">
+                            <button type="button" id="btnUpdateQP" class="flex w-full items-center px-4 py-2 text-left text-sm text-slate-300 hover:bg-slate-800 hover:text-emerald-400 transition">
+                                Update Selected QP
+                            </button>
+                            <div class="border-t border-slate-700"></div>
+                            <button type="button" id="btnCreateQP" class="flex w-full items-center px-4 py-2 text-left text-sm text-slate-300 hover:bg-slate-800 hover:text-emerald-400 transition">
+                                Create New QP
+                            </button>
+                        </div>
+                    </div>
 
                 </div>
 

@@ -31,6 +31,15 @@ let historyWS = null;
 let testRunStartedAt = null;
 let activeRequestNumber = null;
 
+/*
+ * Collection context — set when testview is opened via
+ * ?collection=<name> from the Collection View right-click menu.
+ * activeCollectionEndpointIds is the Set of endpoint IDs that
+ * belong to the collection; null means "show all".
+ */
+let activeCollectionFilter = null;
+let activeCollectionEndpointIds = null;
+
 const LOCAL_QP_KEY = "edmsTestViewQPs";
 
 const API_BASE = "http://localhost:3000";
@@ -72,8 +81,8 @@ const endpointPath =
 const runButton =
     document.getElementById("runRequest");
 
-const stopButton =
-    document.getElementById("stopRequest");
+const saveButton =
+    document.getElementById("saveRequest");
 
 const annotationInput =
     document.getElementById("annotations");
@@ -156,6 +165,153 @@ async function initTestView() {
     updateSidebarTabButtons();
     applyTestFilters();
 
+    await initCollectionContext();
+
+}
+
+// ============================================================
+// COLLECTION CONTEXT (launched via ?collection= URL param)
+// ============================================================
+
+async function initCollectionContext() {
+
+    const params =
+        new URLSearchParams(
+            window.location.search
+        );
+
+    const collectionName =
+        params.get('collection');
+
+    if (!collectionName) {
+        return;
+    }
+
+    activeCollectionFilter = collectionName;
+
+    /*
+     * Fetch the endpoint IDs that belong to this collection
+     * so we can pre-filter the sidebar list.
+     */
+    try {
+
+        const api = window.EdmsAPI;
+
+        if (
+            api &&
+            typeof api.listCollectionEndpoints === 'function'
+        ) {
+
+            const response =
+                await api.listCollectionEndpoints(
+                    collectionName
+                );
+
+            const data =
+                response?.data ?? response;
+
+            const items =
+                Array.isArray(data)
+                    ? data
+                    : Array.isArray(data?.endpoints)
+                        ? data.endpoints
+                        : Array.isArray(data?.items)
+                            ? data.items
+                            : [];
+
+            activeCollectionEndpointIds = new Set(
+                items.map(
+                    item =>
+                        String(
+                            item?.endpoint_id ??
+                            item?.id ??
+                            item ??
+                            ''
+                        )
+                ).filter(Boolean)
+            );
+
+        }
+
+    } catch (error) {
+
+        console.error(
+            'Failed to load collection membership for Test View filter:',
+            error
+        );
+
+        activeCollectionEndpointIds = null;
+
+    }
+
+    /*
+     * Show the banner and populate it.
+     */
+    const banner =
+        document.getElementById(
+            'collectionContextBanner'
+        );
+
+    const nameEl =
+        document.getElementById(
+            'collectionContextName'
+        );
+
+    const countEl =
+        document.getElementById(
+            'collectionContextCount'
+        );
+
+    const clearBtn =
+        document.getElementById(
+            'clearCollectionFilter'
+        );
+
+    if (nameEl) {
+        nameEl.textContent =
+            collectionName;
+    }
+
+    if (countEl) {
+        const count =
+            activeCollectionEndpointIds
+                ? activeCollectionEndpointIds.size
+                : '?';
+
+        countEl.textContent =
+            `${count} endpoint${count === 1 ? '' : 's'}`;
+    }
+
+    if (banner) {
+        banner.classList.remove('hidden');
+        banner.classList.add('flex');
+    }
+
+    if (clearBtn) {
+        clearBtn.addEventListener(
+            'click',
+            () => {
+
+                activeCollectionFilter = null;
+                activeCollectionEndpointIds = null;
+
+                if (banner) {
+                    banner.classList.add('hidden');
+                    banner.classList.remove('flex');
+                }
+
+                applyTestFilters();
+
+            }
+        );
+    }
+
+    /*
+     * Re-apply filters now that the collection
+     * membership set is populated.
+     */
+    applyTestFilters();
+
 }
 
 // ============================================================
@@ -214,6 +370,54 @@ async function fetchEndpointTags(endpointId) {
     return Array.isArray(data?.tags)
         ? data.tags
         : [];
+
+}
+
+// ============================================================
+// QP API
+// ============================================================
+
+async function fetchEndpointQPs(endpointId) {
+
+    if (
+        endpointId === undefined ||
+        endpointId === null
+    ) {
+
+        return [];
+
+    }
+
+    const response =
+        await fetch(
+            `${API_BASE}/test-view/${encodeURIComponent(endpointId)}/qps`
+        );
+
+    if (!response.ok) {
+
+        throw new Error(
+            `Failed to load endpoint QPs: ${response.status}`
+        );
+
+    }
+
+    const data =
+        await response.json();
+
+    if (!data.ok || !Array.isArray(data.qps)) {
+        return [];
+    }
+
+    return data.qps.map(qp => ({
+        id: qp.request_number,
+        name: String(qp.request_number),
+        method: qp.method,
+        timestamp: qp.timestamp,
+        status_code: qp.status_code,
+        response_time_ms: qp.response_time_ms,
+        request: {},
+        response: {}
+    }));
 
 }
 
@@ -402,15 +606,31 @@ async function loadEndpointTagsFromBackend() {
 
                 try {
 
-                    endpoint.tags =
-                        await fetchEndpointTags(
-                            endpoint.id
-                        );
+                    const [tags, qps] = await Promise.all([
+                        fetchEndpointTags(endpoint.id),
+                        fetchEndpointQPs(endpoint.id)
+                    ]);
+
+                    endpoint.tags = tags;
+
+                    if (qps.length > 0) {
+                        const localQPs = Array.isArray(endpoint.qps) ? endpoint.qps : [];
+                        endpoint.qps = qps.map(backendQp => {
+                            const localQp = localQPs.find(q => String(q.id) === String(backendQp.id));
+                            return {
+                                ...backendQp,
+                                request: localQp?.request || {},
+                                response: localQp?.response || {}
+                            };
+                        });
+                    } else if (!Array.isArray(endpoint.qps)) {
+                        endpoint.qps = [];
+                    }
 
                 } catch (error) {
 
                     console.warn(
-                        `Could not load tags for endpoint ${endpoint.id}:`,
+                        `Could not load tags or QPs for endpoint ${endpoint.id}:`,
                         error
                     );
 
@@ -421,6 +641,16 @@ async function loadEndpointTagsFromBackend() {
                     ) {
 
                         endpoint.tags = [];
+
+                    }
+                    
+                    if (
+                        !Array.isArray(
+                            endpoint.qps
+                        )
+                    ) {
+
+                        endpoint.qps = [];
 
                     }
 
@@ -507,18 +737,31 @@ function loadEndpointsFromBackend() {
                                     normalizeBackendEndpoint
                                 );
 
+                            const wasFinished = finished;
                             finished = true;
 
                             console.log(
                                 `Loaded ${endpoints.length} endpoints from backend.`
                             );
 
-                            resolve();
+                            if (!wasFinished) {
+                                resolve();
+                            } else {
+                                applyTestFilters();
+                            }
 
-                            try {
-                                ws.close();
-                            } catch {}
-
+                        } else if (message.type === "event" && message.event) {
+                            const evtType = message.event.type;
+                            if (
+                                evtType === "CrudOperationsUpdated" ||
+                                evtType === "EndpointAnnotationUpdated" ||
+                                evtType === "CollectionLoaded" ||
+                                evtType === "ViewRefresh"
+                            ) {
+                                try { ws.close(); } catch {}
+                                setTimeout(() => loadEndpointsFromBackend().then(() => applyTestFilters()), 0);
+                                return;
+                            }
                         }
 
                     } catch (error) {
@@ -647,12 +890,19 @@ function normalizeBackendEndpoint(endpoint) {
 
 function loadBookmarksFromBackend() {
 
+    // If there's no collection context, don't try to load bookmarks.
+    if (!activeCollectionFilter) {
+        return Promise.resolve();
+    }
+
+    const collectionForThisLoad = activeCollectionFilter;
+
     return new Promise(
         (resolve, reject) => {
 
             const ws =
                 window.EdmsAPI
-                    .connectBookmarkLoader();
+                    .connectBookmarkLoader(collectionForThisLoad);
 
             bookmarkWS = ws;
 
@@ -696,18 +946,39 @@ function loadBookmarksFromBackend() {
                             bookmarks =
                                 message.bookmarks;
 
+                            const wasFinished = finished;
                             finished = true;
 
                             console.log(
-                                `Loaded ${bookmarks.length} active bookmarks from backend.`
+                                `Loaded ${bookmarks.length} bookmarks for collection '${collectionForThisLoad}' from backend.`
                             );
 
-                            resolve();
+                            if (!wasFinished) {
+                                resolve();
+                            } else {
+                                applyTestFilters();
+                            }
 
-                            try {
-                                ws.close();
-                            } catch {}
+                        } else if (message.type === "event" && message.event) {
+                            const evtType = message.event.type;
+                            const evtCollection = message.event.collection;
 
+                            if (evtType === "ViewRefresh") {
+                                // Always reload on a view refresh.
+                                try { ws.close(); } catch {}
+                                setTimeout(() => loadBookmarksFromBackend().then(() => applyTestFilters()), 0);
+                                return;
+                            }
+
+                            if (
+                                evtType === "BookmarksUpdated" &&
+                                evtCollection === collectionForThisLoad
+                            ) {
+                                // Only reload if the update is for *our* collection.
+                                try { ws.close(); } catch {}
+                                setTimeout(() => loadBookmarksFromBackend().then(() => applyTestFilters()), 0);
+                                return;
+                            }
                         }
 
                     } catch (error) {
@@ -823,18 +1094,29 @@ function loadHistoryFromBackend() {
                                     })
                                 );
 
+                            const wasFinished = finished;
                             finished = true;
 
                             console.log(
                                 `Loaded ${historyRecords.length} history records from backend.`
                             );
 
-                            resolve();
+                            if (!wasFinished) {
+                                resolve();
+                            } else {
+                                applyTestFilters();
+                            }
 
-                            try {
-                                ws.close();
-                            } catch {}
-
+                        } else if (message.type === "event" && message.event) {
+                            const evtType = message.event.type;
+                            if (
+                                evtType === "HistoryUpdated" ||
+                                evtType === "ViewRefresh"
+                            ) {
+                                try { ws.close(); } catch {}
+                                setTimeout(() => loadHistoryFromBackend().then(() => applyTestFilters()), 0);
+                                return;
+                            }
                         }
 
                     } catch (error) {
@@ -1762,11 +2044,13 @@ async function saveEndpointToActiveCollection(
     try {
 
         await window.EdmsAPI.addActiveBookmark(
+            activeCollectionFilter,
             endpointId
         );
 
         const result =
             await window.EdmsAPI.saveActiveBookmark(
+                activeCollectionFilter,
                 endpointId
             );
 
@@ -2087,10 +2371,26 @@ async function refreshSelectedEndpointTags() {
 
     try {
 
-        selectedTestEndpoint.tags =
-            await fetchEndpointTags(
-                selectedTestEndpoint.id
-            );
+        const [tags, qps] = await Promise.all([
+            fetchEndpointTags(selectedTestEndpoint.id),
+            fetchEndpointQPs(selectedTestEndpoint.id)
+        ]);
+
+        selectedTestEndpoint.tags = tags;
+        
+        if (qps.length > 0) {
+            const localQPs = Array.isArray(selectedTestEndpoint.qps) ? selectedTestEndpoint.qps : [];
+            selectedTestEndpoint.qps = qps.map(backendQp => {
+                const localQp = localQPs.find(q => String(q.id) === String(backendQp.id));
+                return {
+                    ...backendQp,
+                    request: localQp?.request || {},
+                    response: localQp?.response || {}
+                };
+            });
+        } else if (!Array.isArray(selectedTestEndpoint.qps)) {
+            selectedTestEndpoint.qps = [];
+        }
 
         const endpoint =
             findEndpoint(
@@ -2101,13 +2401,16 @@ async function refreshSelectedEndpointTags() {
 
             endpoint.tags =
                 selectedTestEndpoint.tags;
+                
+            endpoint.qps =
+                selectedTestEndpoint.qps;
 
         }
 
     } catch (error) {
 
         console.warn(
-            "Could not refresh endpoint tags:",
+            "Could not refresh endpoint tags or QPs:",
             error
         );
 
@@ -2654,7 +2957,7 @@ function doClearSelectionQP() {
 // DELETE SELECTED QP
 // ============================================================
 
-function doDeleteSelectedQP() {
+async function doDeleteSelectedQP() {
 
     if (
         !selectedTestEndpoint ||
@@ -2672,6 +2975,27 @@ function doDeleteSelectedQP() {
         );
 
         return;
+    }
+
+    const endpointId = selectedTestEndpoint.id;
+
+    if (endpointId !== undefined && endpointId !== null) {
+        const deletePromises = [];
+        for (const qpId of selectedQPIds) {
+            if (String(qpId) !== "default") {
+                deletePromises.push(
+                    fetch(
+                        `${API_BASE}/test-view/${encodeURIComponent(endpointId)}/qps/${encodeURIComponent(qpId)}/delete`,
+                        { method: "POST" }
+                    ).catch(error => {
+                        console.error(`Error deleting QP ${qpId}:`, error);
+                    })
+                );
+            }
+        }
+        if (deletePromises.length > 0) {
+            await Promise.all(deletePromises);
+        }
     }
 
     selectedTestEndpoint.qps =
@@ -2696,7 +3020,7 @@ function doDeleteSelectedQP() {
 // SELECT QP
 // ============================================================
 
-function selectTestQP(
+async function selectTestQP(
     qp,
     button
 ) {
@@ -2743,6 +3067,52 @@ function selectTestQP(
 
     renderCurrentRequest();
     renderCurrentResponse();
+
+    if (qp.id !== "default" && selectedTestEndpoint?.id && !qp.isFullDataLoaded) {
+        try {
+            const endpointId = encodeURIComponent(selectedTestEndpoint.id);
+            const qpId = encodeURIComponent(qp.id);
+
+            const [reqRes, resRes, headRes] = await Promise.all([
+                fetch(`${API_BASE}/test-view/${endpointId}/request/${qpId}`).catch(() => null),
+                fetch(`${API_BASE}/test-view/${endpointId}/response/${qpId}`).catch(() => null),
+                fetch(`${API_BASE}/test-view/${endpointId}/headers/${qpId}`).catch(() => null)
+            ]);
+
+            qp.request = qp.request || {};
+            qp.response = qp.response || {};
+
+            if (reqRes && reqRes.ok) {
+                const text = await reqRes.text();
+                try { qp.request.body = JSON.parse(text); } 
+                catch { qp.request.body = text; }
+            }
+
+            if (resRes && resRes.ok) {
+                const text = await resRes.text();
+                try { qp.response.body = JSON.parse(text); } 
+                catch { qp.response.body = text; }
+            }
+
+            if (headRes && headRes.ok) {
+                const text = await headRes.text();
+                try {
+                    const headersData = JSON.parse(text);
+                    qp.request.headers = headersData.request_headers || {};
+                    qp.response.headers = headersData.response_headers || {};
+                } catch {}
+            }
+
+            qp.isFullDataLoaded = true;
+
+            if (selectedTestQP === qp) {
+                renderCurrentRequest();
+                renderCurrentResponse();
+            }
+        } catch (error) {
+            console.error("Failed to load full QP data:", error);
+        }
+    }
 
 }
 
@@ -3086,6 +3456,36 @@ function applyTestFilters() {
                         item.source ||
                         item;
 
+                    /*
+                     * Collection filter — only show endpoints
+                     * that are members of the active collection
+                     * (when the page was opened via ?collection=).
+                     */
+                    if (
+                        activeSidebarTab !== "history" &&
+                        activeCollectionEndpointIds !== null
+                    ) {
+
+                        const itemId =
+                            String(
+                                item.id ??
+                                item.endpointId ??
+                                item.endpoint_id ??
+                                ''
+                            );
+
+                        if (
+                            !activeCollectionEndpointIds.has(
+                                itemId
+                            )
+                        ) {
+
+                            return false;
+
+                        }
+
+                    }
+
                     const haystack = [
 
                         item.id,
@@ -3138,6 +3538,7 @@ function applyTestFilters() {
     renderTestEndpoints();
 
 }
+
 
 // ============================================================
 // TIME MATCH
@@ -3239,30 +3640,132 @@ function setupRunner() {
                 event.preventDefault();
                 event.stopPropagation();
 
-                runTestEndpoint();
+                if (runButton.dataset.running === "true") {
+                    stopTestEndpoint();
+                } else {
+                    runTestEndpoint();
+                }
 
             }
         );
 
     }
 
-    if (stopButton) {
+    const saveDropdownContainer = document.getElementById("saveDropdownContainer");
+    const saveMenu = document.getElementById("saveMenu");
+    const btnUpdateQP = document.getElementById("btnUpdateQP");
+    const btnCreateQP = document.getElementById("btnCreateQP");
 
-        stopButton.type =
-            "button";
-
-        stopButton.addEventListener(
-            "click",
-            event => {
-
-                event.preventDefault();
-                event.stopPropagation();
-
-                stopTestEndpoint();
-
+    if (saveButton && saveMenu && saveDropdownContainer) {
+        saveButton.type = "button";
+        
+        saveButton.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            saveMenu.classList.toggle("hidden");
+            
+            if (!saveMenu.classList.contains("hidden")) {
+                if (selectedTestQP) {
+                    btnUpdateQP.style.display = "flex";
+                } else {
+                    btnUpdateQP.style.display = "none";
+                }
             }
-        );
-
+        });
+        
+        document.addEventListener("click", event => {
+            if (!saveDropdownContainer.contains(event.target)) {
+                saveMenu.classList.add("hidden");
+            }
+        });
+        
+        btnUpdateQP.addEventListener("click", async event => {
+            event.preventDefault();
+            event.stopPropagation();
+            saveMenu.classList.add("hidden");
+            
+            const endpoint = selectedTestEndpoint;
+            if (!endpoint || !selectedTestQP) return;
+            
+            try {
+                const res = await fetch(`http://localhost:3000/test-view/${encodeURIComponent(endpoint.id)}/qps/${encodeURIComponent(selectedTestQP)}/update`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        request_body: requestContent.value,
+                        response_body: responseContent.value
+                    })
+                });
+                if (res.ok) {
+                    console.log("QP updated on backend successfully");
+                    const qp = endpoint.qps?.find(q => String(q.id) === String(selectedTestQP));
+                    if (qp) {
+                        if (!qp.request) qp.request = {};
+                        if (!qp.response) qp.response = {};
+                        qp.request.body = requestContent.value;
+                        qp.response.body = responseContent.value;
+                        saveLocalQPs(); // Keep local cache in sync just in case
+                    }
+                } else {
+                    console.error("Failed to update QP on backend");
+                }
+            } catch (e) {
+                console.error("Error updating QP:", e);
+            }
+        });
+        
+        btnCreateQP.addEventListener("click", async event => {
+            event.preventDefault();
+            event.stopPropagation();
+            saveMenu.classList.add("hidden");
+            
+            const endpoint = selectedTestEndpoint;
+            if (!endpoint) return;
+            
+            try {
+                const res = await fetch(`http://localhost:3000/test-view/${encodeURIComponent(endpoint.id)}/qps/create`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        method: endpoint.method || "GET",
+                        request_body: requestContent.value,
+                        response_body: responseContent.value
+                    })
+                });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    if (!Array.isArray(endpoint.qps)) endpoint.qps = [];
+                    
+                    const newQp = {
+                        id: data.request_number,
+                        name: String(data.request_number),
+                        method: endpoint.method,
+                        timestamp: new Date().toISOString(),
+                        request: {
+                            body: requestContent.value,
+                            query: {},
+                            headers: {}
+                        },
+                        response: {
+                            body: responseContent.value,
+                            status: null
+                        }
+                    };
+                    
+                    endpoint.qps.push(newQp);
+                    saveLocalQPs(); // Keep local cache in sync
+                    
+                    renderTestQPs(endpoint);
+                    selectTestQP(newQp.id);
+                    console.log("QP created on backend successfully");
+                } else {
+                    console.error("Failed to create QP on backend");
+                }
+            } catch (e) {
+                console.error("Error creating QP:", e);
+            }
+        });
     }
 
     const runForm =
@@ -4728,18 +5231,32 @@ function setRunButtonState(
 
     if (!runButton) return;
 
-    runButton.disabled =
-        isRunning;
+    runButton.dataset.running = isRunning ? "true" : "false";
 
-    runButton.classList.toggle(
-        "opacity-50",
-        isRunning
-    );
+    const runIconContainer = document.getElementById("runIconContainer");
+    const runText = document.getElementById("runText");
 
-    runButton.classList.toggle(
-        "cursor-not-allowed",
-        isRunning
-    );
+    if (isRunning) {
+        runButton.className = "h-8 shrink-0 px-4 flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-transparent text-red-400 font-semibold text-sm transition hover:bg-red-500/10 active:scale-95";
+        
+        if (runIconContainer) {
+            runIconContainer.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-3.5 h-3.5"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>`;
+        }
+        
+        if (runText) {
+            runText.textContent = "Stop";
+        }
+    } else {
+        runButton.className = "h-8 shrink-0 px-4 flex items-center gap-1.5 rounded-lg bg-cyan-500 text-slate-950 font-semibold text-sm transition hover:bg-cyan-400 active:scale-95 shadow-md shadow-cyan-500/20";
+        
+        if (runIconContainer) {
+            runIconContainer.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>`;
+        }
+        
+        if (runText) {
+            runText.textContent = "Run";
+        }
+    }
 
 }
 
@@ -5534,10 +6051,7 @@ function setupSidebarTabs() {
         "history"
     );
 
-    setupSidebarTab(
-        "bookmarksTab",
-        "bookmarks"
-    );
+
 
     setupSidebarTab(
         "endpointsTab",
@@ -5597,8 +6111,7 @@ function updateSidebarTabButtons() {
         historyTab:
             "history",
 
-        bookmarksTab:
-            "bookmarks",
+
 
         endpointsTab:
             "endpoints"
@@ -5655,9 +6168,7 @@ function updateSidebarTabUnderline() {
             "historyTab"
         ),
 
-        document.getElementById(
-            "bookmarksTab"
-        ),
+
 
         document.getElementById(
             "endpointsTab"
@@ -5683,18 +6194,6 @@ function updateSidebarTabUnderline() {
                     return (
                         activeSidebarTab ===
                         "history"
-                    );
-
-                }
-
-                if (
-                    tab.id ===
-                    "bookmarksTab"
-                ) {
-
-                    return (
-                        activeSidebarTab ===
-                        "bookmarks"
                     );
 
                 }

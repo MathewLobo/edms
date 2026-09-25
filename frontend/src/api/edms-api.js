@@ -223,6 +223,26 @@
 
 
     // ============================================================
+    // UPDATE ENDPOINT ANNOTATION
+    // ============================================================
+
+    async function setEndpointAnnotation(
+        endpointId,
+        annotation
+    ) {
+
+        return http(
+            'POST',
+            `/endpoints/${encodeURIComponent(endpointId)}/annotation`,
+            {
+                annotation
+            }
+        );
+
+    }
+
+
+    // ============================================================
     // STATIC VIEW METADATA
     // ============================================================
 
@@ -278,10 +298,10 @@
     }
 
 
-    function connectBookmarkLoader() {
+    function connectBookmarkLoader(collection) {
 
         return createWebSocket(
-            '/test-view/bookmarks/load'
+            `/test-view/${encodeURIComponent(collection)}/bookmarks/load`
         );
 
     }
@@ -766,7 +786,8 @@
 
     async function saveBookmark(
         endpointId,
-        notes
+        notes,
+        collection
     ) {
 
         return http(
@@ -776,18 +797,20 @@
                 endpoint_id:
                     endpointId,
 
-                notes
+                notes,
+
+                collection
             }
         );
 
     }
 
 
-    async function clearBookmarks() {
+    async function clearBookmarks(collection) {
 
         return http(
             'POST',
-            '/test-view/bookmark/clearall'
+            `/test-view/${encodeURIComponent(collection)}/bookmark/clearall`
         );
 
     }
@@ -798,6 +821,7 @@
     // ============================================================
 
     function addActiveBookmark(
+        collection,
         endpointId
     ) {
 
@@ -809,7 +833,7 @@
 
                 const ws =
                     createWebSocket(
-                        '/test-view/active/add'
+                        `/test-view/${encodeURIComponent(collection)}/add`
                     );
 
 
@@ -934,12 +958,14 @@
 
 
     async function saveActiveBookmark(
+        collection,
         endpointId
     ) {
 
         return http(
             'POST',
-            `/bookmarks/active/` +
+            `/bookmarks/` +
+            `${encodeURIComponent(collection)}/` +
             `${encodeURIComponent(endpointId)}/save`
         );
 
@@ -947,12 +973,14 @@
 
 
     async function unsaveActiveBookmark(
+        collection,
         endpointId
     ) {
 
         return http(
             'POST',
-            `/bookmarks/active/` +
+            `/bookmarks/` +
+            `${encodeURIComponent(collection)}/` +
             `${encodeURIComponent(endpointId)}/unsave`
         );
 
@@ -1024,6 +1052,21 @@
         return http(
             'POST',
             `/collections/${encodeURIComponent(name)}/delete`
+        );
+
+    }
+
+    async function setCollectionAnnotation(
+        name,
+        annotation
+    ) {
+
+        return http(
+            'POST',
+            `/collections/${encodeURIComponent(name)}/annotation`,
+            {
+                annotation
+            }
         );
 
     }
@@ -1957,6 +2000,7 @@
         registerEndpoint,
         registerAllEndpoints,
         deleteEndpoint,
+        setEndpointAnnotation,
 
 
         // ----------------------------------------
@@ -2007,6 +2051,7 @@
         createCollection,
         renameCollection,
         deleteCollection,
+        setCollectionAnnotation,
 
         listCollectionEndpoints,
         removeEndpointFromCollection,

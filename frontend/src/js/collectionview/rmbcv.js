@@ -169,6 +169,9 @@ function init() {
             }
 
 
+
+
+
             <!-- ============================================ -->
             <!-- WEB VIEW -->
             <!-- ============================================ -->
@@ -185,15 +188,15 @@ function init() {
 
 
             <!-- ============================================ -->
-            <!-- SET ACTIVE -->
+            <!-- CREATE TEST VIEW -->
             <!-- ============================================ -->
 
             ${
                 isSingle
                     ? menuItem(
-                        'active',
-                        iconPin(),
-                        'Set Active Folder'
+                        'testview',
+                        iconFlask(),
+                        'Create Test View'
                     )
                     : ''
             }
@@ -224,6 +227,21 @@ function init() {
                         'duplicate',
                         iconCopy(),
                         'Duplicate'
+                    )
+                    : ''
+            }
+
+
+            <!-- ============================================ -->
+            <!-- MODIFY (TAGS & ANNOTATION) -->
+            <!-- ============================================ -->
+
+            ${
+                isSingle
+                    ? menuItem(
+                        'edittags',
+                        iconTag(),
+                        'Modify'
                     )
                     : ''
             }
@@ -394,24 +412,25 @@ function init() {
                     break;
 
 
+
+
+
                 // --------------------------------------------
-                // SET ACTIVE
+                // CREATE TEST VIEW
                 // --------------------------------------------
 
-                case 'active':
+                case 'testview':
 
                     if (
                         targetIds.length === 1
                     ) {
 
                         /*
-                         * Load the selected collection into
-                         * the backend Active Collection workspace.
-                         *
-                         * This does NOT navigate to Bookmark View.
+                         * Open the Test View page in a new tab,
+                         * pre-scoped to the right-clicked collection.
                          */
-                        await window.CollectionView
-                            .loadCollectionIntoActive(
+                        window.CollectionView
+                            .openTestView(
                                 targetIds[0]
                             );
 
@@ -432,6 +451,26 @@ function init() {
 
                         window.CollectionView
                             .openRenameModal(
+                                targetIds[0]
+                            );
+
+                    }
+
+                    break;
+
+
+                // --------------------------------------------
+                // EDIT TAGS
+                // --------------------------------------------
+
+                case 'edittags':
+
+                    if (
+                        targetIds.length === 1
+                    ) {
+
+                        window.CollectionView
+                            .openTagEditor(
                                 targetIds[0]
                             );
 
@@ -737,20 +776,32 @@ function init() {
     }
 
 
-    function iconPin() {
+    function iconFlask() {
 
         return iconBase(`
 
             <path
-                d="M12 17v5"
+                d="M9 3h6"
             />
 
             <path
-                d="M7 4h10"
+                d="M9 3v7L5 20h14L15 10V3"
             />
 
-            <path
-                d="M8 4v6l-3 4h14l-3-4V4"
+            <circle
+                cx="9"
+                cy="16"
+                r="1"
+                fill="currentColor"
+                stroke="none"
+            />
+
+            <circle
+                cx="13"
+                cy="14"
+                r="0.8"
+                fill="currentColor"
+                stroke="none"
             />
 
         `);
@@ -873,6 +924,25 @@ function init() {
     }
 
 
+    function iconEye() {
+
+        return iconBase(`
+
+            <path
+                d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"
+            />
+
+            <circle
+                cx="12"
+                cy="12"
+                r="3"
+            />
+
+        `);
+
+    }
+
+
     function iconTrash() {
 
         return iconBase(`
@@ -899,6 +969,14 @@ function init() {
 
         `);
 
+    }
+
+
+    function iconTag() {
+        return iconBase(`
+            <path d="M20.5 13.5 13.5 20.5a2 2 0 0 1-2.8 0L4 13.8V4h9.8l6.7 6.7a2 2 0 0 1 0 2.8Z" />
+            <circle cx="8.5" cy="8.5" r="1" />
+        `);
     }
 
 }

@@ -1,1260 +1,721 @@
 (() => {
-    'use strict';
+  "use strict";
 
-    // ============================================================
-    // CONFIG
-    // ============================================================
+  // ============================================================
+  // CONFIG
+  // ============================================================
 
-    const PAGE_SIZE = 50;
+  const PAGE_SIZE = 50;
 
-    const API_BASE = 'http://localhost:3000';
+  const API_BASE = "http://localhost:3000";
 
-    let nextId = 9000;
+  let nextId = 9000;
 
+  // ============================================================
+  // STATE
+  // ============================================================
 
-    // ============================================================
-    // STATE
-    // ============================================================
+  const state = {
+    folders: [],
 
-    const state = {
+    filtered: [],
 
-        folders: [],
+    page: 1,
 
-        filtered: [],
+    search: "",
 
-        page: 1,
+    purpose: "all",
 
-        search: '',
+    tags: new Set(),
 
-        purpose: 'all',
+    segments: new Set(),
 
-        tags: new Set(),
+    selected: new Set(),
 
-        segments: new Set(),
+    activeFolderId: null,
 
-        selected: new Set(),
+    prevActiveFolderId: null,
 
-        activeFolderId: null,
+    sidebarCollapsed: false,
+  };
 
-        prevActiveFolderId: null,
+  // ============================================================
+  // INIT
+  // ============================================================
 
-        sidebarCollapsed: false
+  document.addEventListener("DOMContentLoaded", init);
 
-    };
+  async function init() {
+    wireToolbar();
 
+    wireTableEvents();
 
-    // ============================================================
-    // INIT
-    // ============================================================
+    wireSidebar();
 
-    document.addEventListener(
-        'DOMContentLoaded',
-        init
+    wireSelection();
+
+    wireModal();
+
+    await loadFolders();
+
+    renderSidebar();
+
+    applyFilters();
+
+    if (typeof TagManager !== "undefined") {
+      TagManager.init({
+        view: "collectionview",
+        getItems: () => state.selected.size > 0 
+          ? state.folders.filter(f => state.selected.has(Number(f.id))) 
+          : state.folders,
+        getTags: folder => Array.isArray(folder.tags) ? folder.tags : [],
+        setTags: (folder, tags) => {
+          folder.tags = tags;
+        },
+        addTag: async (folder, tag) => {
+          const api = window.EdmsAPI;
+          if (!api || typeof api.addMembershipTag !== "function") return;
+          await api.addMembershipTag(folder.name, tag);
+          if (!Array.isArray(folder.tags)) folder.tags = [];
+          if (!folder.tags.includes(tag)) folder.tags.push(tag);
+        },
+        removeTag: async (folder, tag) => {
+          const api = window.EdmsAPI;
+          if (!api || typeof api.removeMembershipTag !== "function") return;
+          await api.removeMembershipTag(folder.name, tag);
+          folder.tags = Array.isArray(folder.tags) ? folder.tags.filter(item => item !== tag) : [];
+        },
+        onChange: () => {
+          renderSidebar();
+          applyFilters();
+        }
+      });
+    }
+  }
+
+  // ============================================================
+  // DATA
+  // ============================================================
+
+  function getApi() {
+    return window.EdmsAPI || null;
+  }
+
+  function getApiData(response) {
+    if (!response) {
+      return null;
+    }
+
+    return response.data ?? response;
+  }
+
+  function getCollectionItems(response) {
+    const data = getApiData(response);
+
+    if (!data) {
+      return [];
+    }
+
+    if (Array.isArray(data)) {
+      return data;
+    }
+
+    if (Array.isArray(data.items)) {
+      return data.items;
+    }
+
+    if (Array.isArray(data.collections)) {
+      return data.collections;
+    }
+
+    return [];
+  }
+
+  function collectionName(item) {
+    if (typeof item === "string") {
+      return item;
+    }
+
+    return String(
+      item?.name ?? item?.collection_name ?? item?.collection ?? "",
     );
-
-
-    async function init() {
-
-        wireToolbar();
-
-        wireTableEvents();
-
-        wireSidebar();
-
-        wireSelection();
-
-        wireModal();
-
-        await loadFolders();
-
-        renderSidebar();
-
-        applyFilters();
-
-    }
-
-
-    // ============================================================
-    // DATA
-    // ============================================================
-
-    function getApi() {
-
-        return window.EdmsAPI || null;
-
-    }
-
-
-    function getApiData(response) {
-
-        if (!response) {
-            return null;
-        }
-
-        return response.data ?? response;
-
-    }
-
-
-    function getCollectionItems(response) {
-
-        const data =
-            getApiData(response);
-
-        if (!data) {
-            return [];
-        }
-
-        if (Array.isArray(data)) {
-            return data;
-        }
-
-        if (Array.isArray(data.items)) {
-            return data.items;
-        }
-
-        if (Array.isArray(data.collections)) {
-            return data.collections;
-        }
-
-        return [];
-
-    }
-
-
-    function collectionName(item) {
-
-        if (typeof item === 'string') {
-            return item;
-        }
-
-        return String(
-            item?.name ??
-            item?.collection_name ??
-            item?.collection ??
-            ''
-        );
-
-    }
-
-
-    function makeLocalId(name) {
-
-        /*
-         * The collections API identifies collections by name.
-         * The existing UI uses numeric IDs internally, so keep a
-         * local UI-only ID without inventing backend data.
-         */
-
-        let hash = 0;
-
-        const text =
-            String(name);
-
-        for (
-            let index = 0;
-            index < text.length;
-            index++
-        ) {
-
-            hash =
-                (
-                    (
-                        hash << 5
-                    ) -
-                    hash +
-                    text.charCodeAt(index)
-                ) |
-                0;
-
-        }
-
-        return Math.abs(hash) || nextId++;
-
-    }
-
-
-    async function loadFolders() {
-
-        const api =
-            getApi();
-
-        if (
-            !api ||
-            typeof api.listCollections !== 'function'
-        ) {
-
-            console.error(
-                'EdmsAPI.listCollections() is not available.'
-            );
-
-            state.folders = [];
-
-            return;
-
-        }
-
-
-        try {
-
-            const response =
-                await api.listCollections();
-
-
-            if (
-                response &&
-                response.ok === false
-            ) {
-
-                throw new Error(
-                    `Failed to load collections (${response.status ?? 'unknown'})`
-                );
-
-            }
-
-
-            const items =
-                getCollectionItems(
-                    response
-                );
-
-
-            const previousActive =
-                state.activeFolderId;
-
-
-            const previousActiveFolder =
-                getFolder(
-                    previousActive
-                );
-
-
-            const previousActiveName =
-                previousActiveFolder?.name;
-
-
-            const folders =
-                items
-                    .map(
-                        item => {
-
-                            const name =
-                                collectionName(
-                                    item
-                                ).trim();
-
-
-                            if (!name) {
-                                return null;
-                            }
-
-
-                            return {
-
-                                id:
-                                    makeLocalId(
-                                        name
-                                    ),
-
-                                name,
-
-                                /*
-                                 * These fields are deliberately not
-                                 * populated because the backend collection
-                                 * API does not provide them.
-                                 */
-                                purpose:
-                                    undefined,
-
-                                datatype:
-                                    undefined,
-
-                                annotation:
-                                    undefined,
-
-                                source:
-                                    undefined,
-
-                                tags: [],
-
-                                endpoints: []
-
-                            };
-
-                        }
-                    )
-                    .filter(Boolean);
-
-
-            state.folders =
-                folders;
-
-
-            nextId =
-    Math.max(
-        nextId,
-        ...folders.map(
-            folder =>
-                Number(folder.id) || 0
-        ),
-        0
-    ) + 1;
-
-
-            /*
-             * Fetch the actual endpoint membership and membership
-             * tags for every collection.
-             */
-            await Promise.all(
-                state.folders.map(
-                    folder =>
-                        loadCollectionData(
-                            folder
-                        )
-                )
-            );
-            /*
-     * Enrich collection memberships with the central
-     * endpoint metadata supplied by the backend.
+  }
+
+  function makeLocalId(name) {
+    /*
+     * The collections API identifies collections by name.
+     * The existing UI uses numeric IDs internally, so keep a
+     * local UI-only ID without inventing backend data.
      */
-            await enrichEndpointMetadata();
 
+    let hash = 0;
 
-            const restored =
-                previousActiveName
-                    ? state.folders.find(
-                        folder =>
-                            folder.name ===
-                            previousActiveName
-                    )
-                    : null;
+    const text = String(name);
 
+    for (let index = 0; index < text.length; index++) {
+      hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
+    }
 
-            if (restored) {
+    return Math.abs(hash) || nextId++;
+  }
 
-                state.activeFolderId =
-                    restored.id;
+  async function loadFolders() {
+    const api = getApi();
 
-            } else if (
-                state.folders.length
-            ) {
+    if (!api || typeof api.listCollections !== "function") {
+      console.error("EdmsAPI.listCollections() is not available.");
 
-                /*
-                 * Preserve the existing prototype default:
-                 * second collection, otherwise first.
-                 */
-                state.activeFolderId =
-                    state.folders[1]?.id ??
-                    state.folders[0]?.id ??
-                    null;
+      state.folders = [];
 
-            } else {
+      return;
+    }
 
-                state.activeFolderId =
-                    null;
+    try {
+      const response = await api.listCollections();
 
-            }
+      if (response && response.ok === false) {
+        throw new Error(
+          `Failed to load collections (${response.status ?? "unknown"})`,
+        );
+      }
 
+      const items = getCollectionItems(response);
+
+      const previousActive = state.activeFolderId;
+
+      const previousActiveFolder = getFolder(previousActive);
+
+      const previousActiveName = previousActiveFolder?.name;
+
+      const folders = items
+        .map((item) => {
+          const name = collectionName(item).trim();
+
+          if (!name) {
+            return null;
+          }
+
+          return {
+            id: makeLocalId(name),
+
+            name,
 
             /*
-             * Remove selections that no longer exist.
+             * These fields are deliberately not
+             * populated because the backend collection
+             * API does not provide them (except annotation).
              */
-            const validIds =
-                new Set(
-                    state.folders.map(
-                        folder =>
-                            Number(folder.id)
-                    )
-                );
+            purpose: undefined,
 
+            datatype: undefined,
 
-            state.selected =
-                new Set(
-                    [...state.selected]
-                        .filter(
-                            id =>
-                                validIds.has(
-                                    Number(id)
-                                )
-                        )
-                );
+            annotation: item.annotation ?? undefined,
 
+            source: undefined,
 
-        } catch (error) {
+            tags: [],
 
-            console.error(
-                'Failed to load collections from backend:',
-                error
-            );
+            endpoints: [],
+          };
+        })
+        .filter(Boolean);
 
-            state.folders = [];
+      state.folders = folders;
 
-            state.activeFolderId = null;
+      nextId =
+        Math.max(
+          nextId,
+          ...folders.map((folder) => Number(folder.id) || 0),
+          0,
+        ) + 1;
 
-        }
+      /*
+       * Fetch the actual endpoint membership and membership
+       * tags for every collection.
+       */
+      await Promise.all(
+        state.folders.map((folder) => loadCollectionData(folder)),
+      );
+      /*
+       * Enrich collection memberships with the central
+       * endpoint metadata supplied by the backend.
+       */
+      await enrichEndpointMetadata();
 
+      const restored = previousActiveName
+        ? state.folders.find((folder) => folder.name === previousActiveName)
+        : null;
+
+      if (restored) {
+        state.activeFolderId = restored.id;
+      } else if (state.folders.length) {
+        /*
+         * Preserve the existing prototype default:
+         * second collection, otherwise first.
+         */
+        state.activeFolderId =
+          state.folders[1]?.id ?? state.folders[0]?.id ?? null;
+      } else {
+        state.activeFolderId = null;
+      }
+
+      /*
+       * Remove selections that no longer exist.
+       */
+      const validIds = new Set(
+        state.folders.map((folder) => Number(folder.id)),
+      );
+
+      state.selected = new Set(
+        [...state.selected].filter((id) => validIds.has(Number(id))),
+      );
+    } catch (error) {
+      console.error("Failed to load collections from backend:", error);
+
+      state.folders = [];
+
+      state.activeFolderId = null;
+    }
+  }
+
+  async function loadCollectionData(folder) {
+    const api = getApi();
+
+    if (!api) {
+      return;
     }
 
+    /*
+     * --------------------------------------------------------
+     * Collection endpoint membership
+     * --------------------------------------------------------
+     */
 
-    async function loadCollectionData(
-        folder
-    ) {
+    try {
+      if (typeof api.listCollectionEndpoints === "function") {
+        const response = await api.listCollectionEndpoints(folder.name);
 
-        const api =
-            getApi();
+        const data = getApiData(response);
 
+        const items = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.endpoints)
+            ? data.endpoints
+            : Array.isArray(data?.items)
+              ? data.items
+              : [];
 
-        if (!api) {
-            return;
+        folder.endpoints = items
+          .map((item) => {
+            if (typeof item === "string") {
+              return {
+                id: item,
+
+                endpoint_id: item,
+
+                added_at: undefined,
+
+                endpoint: "",
+
+                endpoint_str: "",
+
+                annotation: undefined,
+
+                method: "",
+              };
+            }
+
+            const endpointId = String(item?.endpoint_id ?? item?.id ?? "");
+
+            if (!endpointId) {
+              return null;
+            }
+
+            return {
+              id: endpointId,
+
+              endpoint_id: endpointId,
+
+              added_at: item?.added_at,
+
+              endpoint: "",
+
+              endpoint_str: "",
+
+              annotation: undefined,
+
+              method: "",
+            };
+          })
+          .filter(Boolean);
+      }
+    } catch (error) {
+      console.error(
+        `Failed to load endpoints for collection "${folder.name}":`,
+        error,
+      );
+
+      folder.endpoints = [];
+    }
+
+    /*
+     * --------------------------------------------------------
+     * Collection membership tags
+     * --------------------------------------------------------
+     */
+
+    try {
+      if (typeof api.listMembershipTags === "function") {
+        const response = await api.listMembershipTags(folder.name);
+
+        const data = getApiData(response);
+
+        const tags = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.tags)
+            ? data.tags
+            : Array.isArray(data?.items)
+              ? data.items
+              : [];
+
+        folder.tags = tags
+          .map((tag) =>
+            typeof tag === "string" ? tag : String(tag?.name ?? tag?.tag ?? ""),
+          )
+          .map((tag) => tag.trim())
+          .filter(Boolean);
+      }
+    } catch (error) {
+      console.error(
+        `Failed to load tags for collection "${folder.name}":`,
+        error,
+      );
+
+      folder.tags = [];
+    }
+  }
+
+  // ============================================================
+  // ENDPOINT METADATA
+  // ============================================================
+
+  async function loadEndpointMetadata() {
+    const api = getApi();
+
+    if (!api || typeof api.connectEndpointLoader !== "function") {
+      return new Map();
+    }
+
+    return new Promise((resolve) => {
+      const metadata = new Map();
+
+      let socket = null;
+
+      let settled = false;
+
+      const finish = () => {
+        if (settled) {
+          return;
         }
 
-
-        /*
-         * --------------------------------------------------------
-         * Collection endpoint membership
-         * --------------------------------------------------------
-         */
+        settled = true;
 
         try {
-
-            if (
-                typeof api.listCollectionEndpoints ===
-                'function'
-            ) {
-
-                const response =
-                    await api.listCollectionEndpoints(
-                        folder.name
-                    );
-
-
-                const data =
-                    getApiData(
-                        response
-                    );
-
-
-                const items =
-                    Array.isArray(data)
-                        ? data
-                        : Array.isArray(data?.endpoints)
-                            ? data.endpoints
-                            : Array.isArray(data?.items)
-                                ? data.items
-                                : [];
-
-
-                folder.endpoints =
-                    items
-                        .map(
-                            item => {
-
-                                if (
-                                    typeof item ===
-                                    'string'
-                                ) {
-
-                                    return {
-
-                                        id: item,
-
-                                        endpoint_id:
-                                            item,
-
-                                        added_at:
-                                            undefined,
-
-                                        endpoint:
-                                            '',
-
-                                        endpoint_str:
-                                            '',
-
-                                        annotation:
-                                            undefined,
-
-                                        method:
-                                            ''
-
-                                    };
-
-                                }
-
-
-                                const endpointId =
-                                    String(
-                                        item?.endpoint_id ??
-                                        item?.id ??
-                                        ''
-                                    );
-
-
-                                if (!endpointId) {
-                                    return null;
-                                }
-
-
-                                return {
-
-                                    id:
-                                        endpointId,
-
-                                    endpoint_id:
-                                        endpointId,
-
-                                    added_at:
-                                        item?.added_at,
-
-                                    endpoint:
-                                        '',
-
-                                    endpoint_str:
-                                        '',
-
-                                    annotation:
-                                        undefined,
-
-                                    method:
-                                        ''
-
-                                };
-
-                            }
-                        )
-                        .filter(Boolean);
-
-            }
-
-        } catch (error) {
-
-            console.error(
-                `Failed to load endpoints for collection "${folder.name}":`,
-                error
-            );
-
-            folder.endpoints = [];
-
+          socket?.close();
+        } catch (_) {
+          // Ignore close errors.
         }
 
+        resolve(metadata);
+      };
 
-        /*
-         * --------------------------------------------------------
-         * Collection membership tags
-         * --------------------------------------------------------
-         */
+      const timeout = setTimeout(finish, 5000);
 
-        try {
+      try {
+        socket = api.connectEndpointLoader();
 
-            if (
-                typeof api.listMembershipTags ===
-                'function'
-            ) {
+        if (!socket) {
+          clearTimeout(timeout);
 
-                const response =
-                    await api.listMembershipTags(
-                        folder.name
-                    );
+          finish();
 
-
-                const data =
-                    getApiData(
-                        response
-                    );
-
-
-                const tags =
-                    Array.isArray(data)
-                        ? data
-                        : Array.isArray(data?.tags)
-                            ? data.tags
-                            : Array.isArray(data?.items)
-                                ? data.items
-                                : [];
-
-
-                folder.tags =
-                    tags
-                        .map(
-                            tag =>
-                                typeof tag === 'string'
-                                    ? tag
-                                    : String(
-                                        tag?.name ??
-                                        tag?.tag ??
-                                        ''
-                                    )
-                        )
-                        .map(
-                            tag =>
-                                tag.trim()
-                        )
-                        .filter(Boolean);
-
-            }
-
-        } catch (error) {
-
-            console.error(
-                `Failed to load tags for collection "${folder.name}":`,
-                error
-            );
-
-            folder.tags = [];
-
+          return;
         }
 
+        socket.onmessage = (event) => {
+          try {
+            const message =
+              typeof event.data === "string"
+                ? JSON.parse(event.data)
+                : event.data;
+
+            collectEndpointMetadata(message, metadata);
+
+            /*
+             * The loader sends the initial
+             * snapshot when the connection opens.
+             * Once we have useful endpoint data,
+             * the current collection memberships
+             * can be enriched and the socket closed.
+             */
+            if (metadata.size > 0) {
+              clearTimeout(timeout);
+
+              finish();
+            }
+          } catch (error) {
+            console.error("Failed to parse endpoint loader message:", error);
+          }
+        };
+
+        socket.onerror = () => {
+          clearTimeout(timeout);
+
+          finish();
+        };
+
+        socket.onclose = () => {
+          clearTimeout(timeout);
+
+          finish();
+        };
+      } catch (error) {
+        console.error("Failed to connect endpoint loader:", error);
+
+        clearTimeout(timeout);
+
+        finish();
+      }
+    });
+  }
+
+  function collectEndpointMetadata(value, metadata) {
+    if (!value) {
+      return;
     }
 
+    if (Array.isArray(value)) {
+      value.forEach((item) => collectEndpointMetadata(item, metadata));
 
-    // ============================================================
-    // ENDPOINT METADATA
-    // ============================================================
-
-    async function loadEndpointMetadata() {
-
-        const api =
-            getApi();
-
-
-        if (
-            !api ||
-            typeof api.connectEndpointLoader !==
-            'function'
-        ) {
-
-            return new Map();
-
-        }
-
-
-        return new Promise(
-            resolve => {
-
-                const metadata =
-                    new Map();
-
-                let socket = null;
-
-                let settled = false;
-
-                const finish =
-                    () => {
-
-                        if (settled) {
-                            return;
-                        }
-
-                        settled = true;
-
-                        try {
-                            socket?.close();
-                        } catch (_) {
-                            // Ignore close errors.
-                        }
-
-                        resolve(metadata);
-
-                    };
-
-
-                const timeout =
-                    setTimeout(
-                        finish,
-                        5000
-                    );
-
-
-                try {
-
-                    socket =
-                        api.connectEndpointLoader();
-
-
-                    if (!socket) {
-
-                        clearTimeout(
-                            timeout
-                        );
-
-                        finish();
-
-                        return;
-
-                    }
-
-
-                    socket.onmessage =
-                        event => {
-
-                            try {
-
-                                const message =
-                                    typeof event.data ===
-                                        'string'
-                                        ? JSON.parse(
-                                            event.data
-                                        )
-                                        : event.data;
-
-
-                                collectEndpointMetadata(
-                                    message,
-                                    metadata
-                                );
-
-
-                                /*
-                                 * The loader sends the initial
-                                 * snapshot when the connection opens.
-                                 * Once we have useful endpoint data,
-                                 * the current collection memberships
-                                 * can be enriched and the socket closed.
-                                 */
-                                if (
-                                    metadata.size > 0
-                                ) {
-
-                                    clearTimeout(
-                                        timeout
-                                    );
-
-                                    finish();
-
-                                }
-
-                            } catch (error) {
-
-                                console.error(
-                                    'Failed to parse endpoint loader message:',
-                                    error
-                                );
-
-                            }
-
-                        };
-
-
-                    socket.onerror =
-                        () => {
-
-                            clearTimeout(
-                                timeout
-                            );
-
-                            finish();
-
-                        };
-
-
-                    socket.onclose =
-                        () => {
-
-                            clearTimeout(
-                                timeout
-                            );
-
-                            finish();
-
-                        };
-
-                } catch (error) {
-
-                    console.error(
-                        'Failed to connect endpoint loader:',
-                        error
-                    );
-
-                    clearTimeout(
-                        timeout
-                    );
-
-                    finish();
-
-                }
-
-            }
-        );
-
+      return;
     }
 
+    if (typeof value !== "object") {
+      return;
+    }
 
-    function collectEndpointMetadata(
-        value,
-        metadata
+    const endpointId = value.endpoint_id ?? value.id;
+
+    if (
+      endpointId &&
+      (value.endpoint_str !== undefined ||
+        value.endpoint !== undefined ||
+        value.method !== undefined ||
+        value.annotation !== undefined)
     ) {
+      metadata.set(String(endpointId), {
+        endpoint_id: String(endpointId),
 
-        if (!value) {
-            return;
-        }
+        endpoint_str: value.endpoint_str ?? value.endpoint ?? "",
 
+        annotation: value.annotation,
 
-        if (Array.isArray(value)) {
-
-            value.forEach(
-                item =>
-                    collectEndpointMetadata(
-                        item,
-                        metadata
-                    )
-            );
-
-            return;
-
-        }
-
-
-        if (
-            typeof value !==
-            'object'
-        ) {
-
-            return;
-
-        }
-
-
-        const endpointId =
-            value.endpoint_id ??
-            value.id;
-
-
-        if (
-            endpointId &&
-            (
-                value.endpoint_str !==
-                undefined ||
-                value.endpoint !==
-                undefined ||
-                value.method !==
-                undefined ||
-                value.annotation !==
-                undefined
-            )
-        ) {
-
-            metadata.set(
-                String(endpointId),
-                {
-
-                    endpoint_id:
-                        String(endpointId),
-
-                    endpoint_str:
-                        value.endpoint_str ??
-                        value.endpoint ??
-                        '',
-
-                    annotation:
-                        value.annotation,
-
-                    method:
-                        value.method
-
-                }
-            );
-
-        }
-
-
-        Object.values(value)
-            .forEach(
-                child =>
-                    collectEndpointMetadata(
-                        child,
-                        metadata
-                    )
-            );
-
+        method: value.method,
+      });
     }
 
+    Object.values(value).forEach((child) =>
+      collectEndpointMetadata(child, metadata),
+    );
+  }
 
-    async function enrichEndpointMetadata() {
+  async function enrichEndpointMetadata() {
+    const api = getApi();
 
-        const api =
-            getApi();
+    if (!api || typeof api.connectEndpointLoader !== "function") {
+      return;
+    }
 
+    const metadata = await loadEndpointMetadata();
 
-        if (
-            !api ||
-            typeof api.connectEndpointLoader !==
-            'function'
-        ) {
+    if (!metadata.size) {
+      return;
+    }
 
-            return;
-
-        }
-
-
-        const metadata =
-            await loadEndpointMetadata();
-
-
-        if (!metadata.size) {
-            return;
-        }
-
-
-        state.folders.forEach(
-            folder => {
-
-                folder.endpoints =
-                    (
-                        Array.isArray(
-                            folder.endpoints
-                        )
-                            ? folder.endpoints
-                            : []
-                    )
-                        .map(
-                            endpoint => {
-
-                                const info =
-                                    metadata.get(
-                                        String(
-                                            endpoint.endpoint_id ??
-                                            endpoint.id ??
-                                            ''
-                                        )
-                                    );
-
-
-                                if (!info) {
-                                    return endpoint;
-                                }
-
-
-                                return {
-
-                                    ...endpoint,
-
-                                    endpoint:
-                                        info.endpoint_str ??
-                                        endpoint.endpoint ??
-                                        '',
-
-                                    endpoint_str:
-                                        info.endpoint_str ??
-                                        endpoint.endpoint_str ??
-                                        '',
-
-                                    annotation:
-                                        info.annotation ??
-                                        endpoint.annotation,
-
-                                    method:
-                                        info.method ??
-                                        endpoint.method ??
-                                        ''
-
-                                };
-
-                            }
-                        );
-
-            }
+    state.folders.forEach((folder) => {
+      folder.endpoints = (
+        Array.isArray(folder.endpoints) ? folder.endpoints : []
+      ).map((endpoint) => {
+        const info = metadata.get(
+          String(endpoint.endpoint_id ?? endpoint.id ?? ""),
         );
 
-    }
-
-
-    // ============================================================
-    // FILTERING
-    // ============================================================
-
-    function applyFilters() {
-
-        const term =
-            state.search
-                .trim()
-                .toLowerCase();
-
-
-        state.filtered =
-            state.folders.filter(
-                folder => {
-
-                    const endpoints =
-                        Array.isArray(
-                            folder.endpoints
-                        )
-                            ? folder.endpoints
-                            : [];
-
-
-                    const folderTags =
-                        Array.isArray(
-                            folder.tags
-                        )
-                            ? folder.tags
-                            : [];
-
-
-                    const matchesSearch =
-                        !term ||
-
-                        String(
-                            folder.name || ''
-                        )
-                            .toLowerCase()
-                            .includes(term) ||
-
-                        String(
-                            folder.annotation || ''
-                        )
-                            .toLowerCase()
-                            .includes(term) ||
-
-                        folderTags.some(
-                            tag =>
-                                String(tag)
-                                    .toLowerCase()
-                                    .includes(term)
-                        ) ||
-
-                        endpoints.some(
-                            endpoint => {
-
-                                const endpointPath =
-                                    String(
-                                        endpoint.endpoint ||
-                                        endpoint.endpoint_str ||
-                                        ''
-                                    )
-                                        .toLowerCase();
-
-
-                                const method =
-                                    String(
-                                        endpoint.method ||
-                                        ''
-                                    )
-                                        .toLowerCase();
-
-
-                                const endpointTags =
-                                    Array.isArray(
-                                        endpoint.tags
-                                    )
-                                        ? endpoint.tags
-                                        : [];
-
-
-                                return (
-                                    endpointPath.includes(term) ||
-                                    method.includes(term) ||
-                                    endpointTags.some(
-                                        tag =>
-                                            String(tag)
-                                                .toLowerCase()
-                                                .includes(term)
-                                    )
-                                );
-
-                            }
-                        );
-
-
-                    /*
-                     * Purpose is not supplied by the backend
-                     * collection APIs, so it must not filter out
-                     * otherwise valid backend collections.
-                     */
-                    const matchesPurpose =
-                        state.purpose === 'all' ||
-                        !folder.purpose ||
-                        folder.purpose ===
-                        state.purpose;
-
-
-                    const matchesTags =
-                        state.tags.size === 0 ||
-                        [...state.tags].every(
-                            tag =>
-                                folderTags.includes(tag) ||
-                                endpoints.some(
-                                    endpoint =>
-                                        Array.isArray(
-                                            endpoint.tags
-                                        ) &&
-                                        endpoint.tags.includes(tag)
-                                )
-                        );
-
-
-                    const folderSegments =
-                        getFolderSegments(
-                            folder
-                        );
-
-
-                    const matchesSegments =
-                        state.segments.size === 0 ||
-                        [...state.segments].every(
-                            segment =>
-                                folderSegments.includes(
-                                    segment
-                                )
-                        );
-
-
-                    return (
-                        matchesSearch &&
-                        matchesPurpose &&
-                        matchesTags &&
-                        matchesSegments
-                    );
-
-                }
-            );
-
-
-        const totalPages =
-            getTotalPages();
-
-
-        if (
-            state.page >
-            totalPages
-        ) {
-
-            state.page =
-                totalPages;
-
+        if (!info) {
+          return endpoint;
         }
 
+        return {
+          ...endpoint,
 
-        render();
+          endpoint: info.endpoint_str ?? endpoint.endpoint ?? "",
 
-    }
+          endpoint_str: info.endpoint_str ?? endpoint.endpoint_str ?? "",
 
+          annotation: info.annotation ?? endpoint.annotation,
 
-    function getTotalPages() {
+          method: info.method ?? endpoint.method ?? "",
+        };
+      });
+    });
+  }
 
-        return Math.max(
-            1,
-            Math.ceil(
-                state.filtered.length /
-                PAGE_SIZE
-            )
+  // ============================================================
+  // FILTERING
+  // ============================================================
+
+  function applyFilters() {
+    const term = state.search.trim().toLowerCase();
+
+    state.filtered = state.folders.filter((folder) => {
+      const endpoints = Array.isArray(folder.endpoints) ? folder.endpoints : [];
+
+      const folderTags = Array.isArray(folder.tags) ? folder.tags : [];
+
+      const matchesSearch =
+        !term ||
+        String(folder.name || "")
+          .toLowerCase()
+          .includes(term) ||
+        String(folder.annotation || "")
+          .toLowerCase()
+          .includes(term) ||
+        folderTags.some((tag) => String(tag).toLowerCase().includes(term)) ||
+        endpoints.some((endpoint) => {
+          const endpointPath = String(
+            endpoint.endpoint || endpoint.endpoint_str || "",
+          ).toLowerCase();
+
+          const method = String(endpoint.method || "").toLowerCase();
+
+          const endpointTags = Array.isArray(endpoint.tags)
+            ? endpoint.tags
+            : [];
+
+          return (
+            endpointPath.includes(term) ||
+            method.includes(term) ||
+            endpointTags.some((tag) => String(tag).toLowerCase().includes(term))
+          );
+        });
+
+      /*
+       * Purpose is not supplied by the backend
+       * collection APIs, so it must not filter out
+       * otherwise valid backend collections.
+       */
+      const matchesPurpose =
+        state.purpose === "all" ||
+        !folder.purpose ||
+        folder.purpose === state.purpose;
+
+      const matchesTags =
+        state.tags.size === 0 ||
+        [...state.tags].every(
+          (tag) =>
+            folderTags.includes(tag) ||
+            endpoints.some(
+              (endpoint) =>
+                Array.isArray(endpoint.tags) && endpoint.tags.includes(tag),
+            ),
         );
 
-    }
+      const folderSegments = getFolderSegments(folder);
 
-
-    function currentPageItems() {
-
-        const start =
-            (state.page - 1) *
-            PAGE_SIZE;
-
-
-        return state.filtered.slice(
-            start,
-            start + PAGE_SIZE
+      const matchesSegments =
+        state.segments.size === 0 ||
+        [...state.segments].every((segment) =>
+          folderSegments.includes(segment),
         );
 
+      return matchesSearch && matchesPurpose && matchesTags && matchesSegments;
+    });
+
+    const totalPages = getTotalPages();
+
+    if (state.page > totalPages) {
+      state.page = totalPages;
     }
 
+    render();
+  }
 
-    // ============================================================
-    // SEGMENTS
-    // ============================================================
+  function getTotalPages() {
+    return Math.max(1, Math.ceil(state.filtered.length / PAGE_SIZE));
+  }
 
-    function getEndpointSegments(
-        endpointPath
-    ) {
+  function currentPageItems() {
+    const start = (state.page - 1) * PAGE_SIZE;
 
-        return String(
-            endpointPath || ''
-        )
-            .split('/')
-            .filter(Boolean);
+    return state.filtered.slice(start, start + PAGE_SIZE);
+  }
 
-    }
+  // ============================================================
+  // SEGMENTS
+  // ============================================================
 
+  function getEndpointSegments(endpointPath) {
+    return String(endpointPath || "")
+      .split("/")
+      .filter(Boolean);
+  }
 
-    function getFolderSegments(
-        folder
-    ) {
+  function getFolderSegments(folder) {
+    const segments = new Set();
 
-        const segments =
-            new Set();
+    const endpoints = Array.isArray(folder.endpoints) ? folder.endpoints : [];
 
+    endpoints.forEach((endpoint) => {
+      getEndpointSegments(endpoint.endpoint || endpoint.endpoint_str).forEach(
+        (segment) => segments.add(segment),
+      );
+    });
 
-        const endpoints =
-            Array.isArray(
-                folder.endpoints
-            )
-                ? folder.endpoints
-                : [];
+    return [...segments];
+  }
 
+  // ============================================================
+  // RENDER
+  // ============================================================
 
-        endpoints.forEach(
-            endpoint => {
+  function render() {
+    renderTable();
 
-                getEndpointSegments(
-                    endpoint.endpoint ||
-                    endpoint.endpoint_str
-                ).forEach(
-                    segment =>
-                        segments.add(segment)
-                );
+    renderPagination();
 
-            }
-        );
+    renderActiveFolderIndicator();
 
+    renderSelectionUI();
 
-        return [...segments];
+    updateStats();
 
-    }
+    syncSidebar();
+  }
 
+  // ============================================================
+  // TABLE
+  // ============================================================
 
-    // ============================================================
-    // RENDER
-    // ============================================================
+  function renderTable() {
+    const tbody = document.getElementById("folderTableBody");
 
-    function render() {
+    if (!tbody) return;
 
-        renderTable();
+    tbody.innerHTML = "";
 
-        renderPagination();
+    const items = currentPageItems();
 
-        renderActiveFolderIndicator();
-
-        renderSelectionUI();
-
-        updateStats();
-
-        syncSidebar();
-
-    }
-
-
-    // ============================================================
-    // TABLE
-    // ============================================================
-
-    function renderTable() {
-
-        const tbody =
-            document.getElementById(
-                'folderTableBody'
-            );
-
-
-        if (!tbody) return;
-
-
-        tbody.innerHTML = '';
-
-
-        const items =
-            currentPageItems();
-
-
-        if (items.length === 0) {
-
-            tbody.innerHTML = `
+    if (items.length === 0) {
+      tbody.innerHTML = `
 
             <tr>
 
@@ -1284,93 +745,47 @@
 
         `;
 
+      updateSelectAllState();
 
-            updateSelectAllState();
-
-            return;
-
-        }
-
-
-        items.forEach(
-            folder => {
-
-                tbody.appendChild(
-                    createFolderRow(folder)
-                );
-
-            }
-        );
-
-
-        updateSelectAllState();
-
+      return;
     }
 
+    items.forEach((folder) => {
+      tbody.appendChild(createFolderRow(folder));
+    });
 
-    function createFolderRow(
-        folder
-    ) {
+    updateSelectAllState();
+  }
 
-        const row =
-            document.createElement('tr');
+  function createFolderRow(folder) {
+    const row = document.createElement("tr");
 
+    const id = Number(folder.id);
 
-        const id =
-            Number(folder.id);
+    const isSelected = state.selected.has(id);
 
+    const endpoints = Array.isArray(folder.endpoints) ? folder.endpoints : [];
 
-        const isSelected =
-            state.selected.has(id);
+    const counts = getCrudCounts(endpoints);
 
+    row.dataset.id = String(id);
 
-        const isActive =
-            Number(
-                state.activeFolderId
-            ) === id;
+    row.className = [
+      "folder-row",
+      "group",
+      "border-b",
+      "border-slate-800",
+      "transition-colors",
+      "duration-100",
+      "cursor-pointer",
+      "hover:bg-slate-800/60",
 
+      isSelected ? "bg-cyan-500/[0.045]" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
 
-        const endpoints =
-            Array.isArray(
-                folder.endpoints
-            )
-                ? folder.endpoints
-                : [];
-
-
-        const counts =
-            getCrudCounts(
-                endpoints
-            );
-
-
-        row.dataset.id =
-            String(id);
-
-
-        row.className =
-            [
-                'folder-row',
-                'border-b',
-                'border-slate-800',
-                'transition-colors',
-                'duration-100',
-                'cursor-pointer',
-                'hover:bg-slate-800/60',
-
-                isSelected
-                    ? 'bg-cyan-500/[0.045]'
-                    : '',
-
-                isActive
-                    ? 'bg-sky-500/[0.055]'
-                    : ''
-            ]
-                .filter(Boolean)
-                .join(' ');
-
-
-        row.innerHTML = `
+    row.innerHTML = `
 
         <td class="px-2 py-2 align-middle">
 
@@ -1379,7 +794,7 @@
                 class="folder-select
                        h-3.5 w-3.5
                        accent-cyan-400"
-                ${isSelected ? 'checked' : ''}
+                ${isSelected ? "checked" : ""}
             >
 
         </td>
@@ -1395,28 +810,14 @@
                        items-center gap-2"
             >
 
-                ${isActive
-                ? `
-                            <span
-                                class="h-1.5 w-1.5
-                                       shrink-0 rounded-full
-                                       bg-cyan-400"
-                                title="Active collection"
-                            ></span>
-                          `
-                : ''
-            }
-
                 <span
-                    class="truncate"
-                    title="${escapeAttr(
-                folder.name
-            )}"
+                    class="truncate flex-1"
+                    title="${escapeAttr(folder.name)}"
                 >
-                    ${escapeHtml(
-                folder.name
-            )}
+                    ${escapeHtml(folder.name)}
                 </span>
+
+
 
             </div>
 
@@ -1429,51 +830,34 @@
                 class="flex flex-wrap
                        gap-1"
             >
-                ${renderFolderTags(
-                folder
-            )}
+                ${renderFolderTags(folder)}
             </div>
 
         </td>
 
 
         <td class="px-1 py-2 text-center">
-            ${crudCountBadge(
-                counts.GET,
-                'text-emerald-400'
-            )}
+            ${crudCountBadge(counts.GET, "text-emerald-400")}
         </td>
 
 
         <td class="px-1 py-2 text-center">
-            ${crudCountBadge(
-                counts.POST,
-                'text-sky-400'
-            )}
+            ${crudCountBadge(counts.POST, "text-sky-400")}
         </td>
 
 
         <td class="px-1 py-2 text-center">
-            ${crudCountBadge(
-                counts.PUT,
-                'text-amber-400'
-            )}
+            ${crudCountBadge(counts.PUT, "text-amber-400")}
         </td>
 
 
         <td class="px-1 py-2 text-center">
-            ${crudCountBadge(
-                counts.PATCH,
-                'text-violet-400'
-            )}
+            ${crudCountBadge(counts.PATCH, "text-violet-400")}
         </td>
 
 
         <td class="px-1 py-2 text-center">
-            ${crudCountBadge(
-                counts.DELETE,
-                'text-rose-400'
-            )}
+            ${crudCountBadge(counts.DELETE, "text-rose-400")}
         </td>
 
 
@@ -1491,161 +875,77 @@
                 class="line-clamp-2
                        text-[11px]
                        text-slate-500"
-                title="${escapeAttr(
-                folder.annotation || ''
-            )}"
+                title="${escapeAttr(folder.annotation || "")}"
             >
-                ${escapeHtml(
-                folder.annotation ||
-                '—'
-            )}
+                ${escapeHtml(folder.annotation || "—")}
             </span>
 
         </td>
 
     `;
 
+    const checkbox = row.querySelector(".folder-select");
 
-        const checkbox =
-            row.querySelector(
-                '.folder-select'
-            );
+    checkbox.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
 
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        state.selected.add(id);
+      } else {
+        state.selected.delete(id);
+      }
 
-        checkbox.addEventListener(
-            'click',
-            event => {
+      renderSelectionUI();
 
-                event.stopPropagation();
+      updateSelectAllState();
 
-            }
-        );
-
-
-        checkbox.addEventListener(
-            'change',
-            () => {
-
-                if (
-                    checkbox.checked
-                ) {
-
-                    state.selected.add(id);
-
-                } else {
-
-                    state.selected.delete(id);
-
-                }
+      renderTable();
+    });
 
 
-                renderSelectionUI();
 
-                updateSelectAllState();
+    row.querySelectorAll(".folder-tag").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
 
-                renderTable();
+        const tag = button.dataset.tag;
 
-            }
-        );
+        state.tags.clear();
 
+        state.tags.add(tag);
 
-        row.querySelectorAll(
-            '.folder-tag'
-        ).forEach(
-            button => {
+        state.page = 1;
 
-                button.addEventListener(
-                    'click',
-                    event => {
+        applyFilters();
+      });
+    });
 
-                        event.stopPropagation();
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("button,input")) {
+        return;
+      }
 
-                        const tag =
-                            button.dataset.tag;
+      openDataView(id);
+    });
 
-                        state.tags.clear();
+    row.addEventListener("dblclick", (event) => {
+      if (event.target.closest("button,input")) {
+        return;
+      }
 
-                        state.tags.add(
-                            tag
-                        );
+      openDataView(id);
+    });
 
-                        state.page = 1;
+    return row;
+  }
 
-                        applyFilters();
+  function renderFolderTags(folder) {
+    const tags = Array.isArray(folder.tags) ? folder.tags : [];
 
-                    }
-                );
-
-            }
-        );
-
-
-        row.addEventListener(
-            'click',
-            event => {
-
-                if (
-                    event.target.closest(
-                        'button,input'
-                    )
-                ) {
-
-                    return;
-
-                }
-
-
-                openDataView(
-                    id
-                );
-
-            }
-        );
-
-
-        row.addEventListener(
-            'dblclick',
-            event => {
-
-                if (
-                    event.target.closest(
-                        'button,input'
-                    )
-                ) {
-
-                    return;
-
-                }
-
-
-                openDataView(
-                    id
-                );
-
-            }
-        );
-
-
-        return row;
-
-    }
-
-
-    function renderFolderTags(
-        folder
-    ) {
-
-        const tags =
-            Array.isArray(
-                folder.tags
-            )
-                ? folder.tags
-                : [];
-
-
-        if (!tags.length) {
-
-            return `
+    if (!tags.length) {
+      return `
             <span
                 class="text-[10px]
                        text-slate-600"
@@ -1653,13 +953,11 @@
                 —
             </span>
         `;
+    }
 
-        }
-
-
-        return tags
-            .map(
-                tag => `
+    return tags
+      .map(
+        (tag) => `
 
                 <button
                     type="button"
@@ -1673,26 +971,18 @@
                            transition
                            hover:bg-sky-500/20
                            hover:text-sky-200"
-                    data-tag="${escapeAttr(
-                    tag
-                )}"
+                    data-tag="${escapeAttr(tag)}"
                 >
                     ${escapeHtml(tag)}
                 </button>
 
-            `
-            )
-            .join('');
+            `,
+      )
+      .join("");
+  }
 
-    }
-
-
-    function crudCountBadge(
-        count,
-        color
-    ) {
-
-        return `
+  function crudCountBadge(count, color) {
+    return `
 
         <span
             class="inline-flex min-w-6
@@ -1707,194 +997,98 @@
         </span>
 
     `;
+  }
 
+  function getCrudCounts(endpoints) {
+    const counts = {
+      GET: 0,
+
+      POST: 0,
+
+      PUT: 0,
+
+      PATCH: 0,
+
+      DELETE: 0,
+    };
+
+    endpoints.forEach((endpoint) => {
+      const method = String(endpoint.method || "").toUpperCase();
+
+      if (Object.prototype.hasOwnProperty.call(counts, method)) {
+        counts[method]++;
+      }
+    });
+
+    return counts;
+  }
+
+  // ============================================================
+  // PAGINATION
+  // ============================================================
+
+  function renderPagination() {
+    const total = state.filtered.length;
+
+    const start = total ? (state.page - 1) * PAGE_SIZE + 1 : 0;
+
+    const end = Math.min(state.page * PAGE_SIZE, total);
+
+    const rangeStart = document.getElementById("paginationRangeStart");
+
+    const rangeEnd = document.getElementById("paginationRangeEnd");
+
+    const paginationTotal = document.getElementById("paginationTotal");
+
+    if (rangeStart) {
+      rangeStart.textContent = start;
     }
 
-
-    function getCrudCounts(
-        endpoints
-    ) {
-
-        const counts = {
-
-            GET: 0,
-
-            POST: 0,
-
-            PUT: 0,
-
-            PATCH: 0,
-
-            DELETE: 0
-
-        };
-
-
-        endpoints.forEach(
-            endpoint => {
-
-                const method =
-                    String(
-                        endpoint.method ||
-                        ''
-                    ).toUpperCase();
-
-
-                if (
-                    Object.prototype.hasOwnProperty.call(
-                        counts,
-                        method
-                    )
-                ) {
-
-                    counts[method]++;
-
-                }
-
-            }
-        );
-
-
-        return counts;
-
+    if (rangeEnd) {
+      rangeEnd.textContent = end;
     }
 
+    if (paginationTotal) {
+      paginationTotal.textContent = total;
+    }
 
-    // ============================================================
-    // PAGINATION
-    // ============================================================
+    const totalPages = getTotalPages();
 
-    function renderPagination() {
+    const numbers = document.getElementById("paginationNumbers");
 
-        const total =
-            state.filtered.length;
+    if (!numbers) {
+      return;
+    }
 
+    numbers.innerHTML = "";
 
-        const start =
-            total
-                ? (
-                    (state.page - 1) *
-                    PAGE_SIZE
-                ) + 1
-                : 0;
+    getPageRange(state.page, totalPages).forEach((page) => {
+      if (page === "...") {
+        const span = document.createElement("span");
 
+        span.className = "px-1 text-slate-600";
 
-        const end =
-            Math.min(
-                state.page * PAGE_SIZE,
-                total
-            );
+        span.textContent = "…";
 
+        numbers.appendChild(span);
 
-        const rangeStart =
-            document.getElementById(
-                'paginationRangeStart'
-            );
+        return;
+      }
 
+      const button = document.createElement("button");
 
-        const rangeEnd =
-            document.getElementById(
-                'paginationRangeEnd'
-            );
+      button.type = "button";
 
+      button.textContent = page;
 
-        const paginationTotal =
-            document.getElementById(
-                'paginationTotal'
-            );
-
-
-        if (rangeStart) {
-            rangeStart.textContent = start;
-        }
-
-
-        if (rangeEnd) {
-            rangeEnd.textContent = end;
-        }
-
-
-        if (paginationTotal) {
-            paginationTotal.textContent = total;
-        }
-
-
-        const totalPages =
-            getTotalPages();
-
-
-        const numbers =
-            document.getElementById(
-                'paginationNumbers'
-            );
-
-
-        if (!numbers) {
-            return;
-        }
-
-
-        numbers.innerHTML = '';
-
-
-        getPageRange(
-            state.page,
-            totalPages
-        ).forEach(
-            page => {
-
-                if (
-                    page === '...'
-                ) {
-
-                    const span =
-                        document.createElement(
-                            'span'
-                        );
-
-
-                    span.className =
-                        'px-1 text-slate-600';
-
-
-                    span.textContent =
-                        '…';
-
-
-                    numbers.appendChild(
-                        span
-                    );
-
-
-                    return;
-
-                }
-
-
-                const button =
-                    document.createElement(
-                        'button'
-                    );
-
-
-                button.type =
-                    'button';
-
-
-                button.textContent =
-                    page;
-
-
-                button.className =
-                    page === state.page
-
-                        ? `
+      button.className =
+        page === state.page
+          ? `
                         min-w-7 rounded-md
                         bg-cyan-500 px-2 py-1
                         text-[11px] text-white
                       `
-
-                        : `
+          : `
                         min-w-7 rounded-md
                         border border-slate-700
                         px-2 py-1
@@ -1905,340 +1099,155 @@
                         hover:text-white
                       `;
 
+      button.addEventListener("click", () => {
+        state.page = page;
 
-                button.addEventListener(
-                    'click',
-                    () => {
+        render();
+      });
 
-                        state.page =
-                            page;
+      numbers.appendChild(button);
+    });
 
-                        render();
+    const prev = document.getElementById("paginationPrev");
 
-                    }
-                );
+    const next = document.getElementById("paginationNext");
 
-
-                numbers.appendChild(
-                    button
-                );
-
-            }
-        );
-
-
-        const prev =
-            document.getElementById(
-                'paginationPrev'
-            );
-
-
-        const next =
-            document.getElementById(
-                'paginationNext'
-            );
-
-
-        if (prev) {
-            prev.disabled =
-                state.page <= 1;
-        }
-
-
-        if (next) {
-            next.disabled =
-                state.page >= totalPages;
-        }
-
+    if (prev) {
+      prev.disabled = state.page <= 1;
     }
 
+    if (next) {
+      next.disabled = state.page >= totalPages;
+    }
+  }
 
-    function getPageRange(
-        current,
-        total
-    ) {
-
-        if (
-            total <= 7
-        ) {
-
-            return Array.from(
-                {
-                    length: total
-                },
-                (_, index) =>
-                    index + 1
-            );
-
-        }
-
-
-        const pages = [
-            1
-        ];
-
-
-        if (
-            current > 4
-        ) {
-
-            pages.push(
-                '...'
-            );
-
-        }
-
-
-        const start =
-            Math.max(
-                2,
-                current - 1
-            );
-
-
-        const end =
-            Math.min(
-                total - 1,
-                current + 1
-            );
-
-
-        for (
-            let page = start;
-            page <= end;
-            page++
-        ) {
-
-            pages.push(
-                page
-            );
-
-        }
-
-
-        if (
-            current < total - 3
-        ) {
-
-            pages.push(
-                '...'
-            );
-
-        }
-
-
-        pages.push(
-            total
-        );
-
-
-        return pages;
-
+  function getPageRange(current, total) {
+    if (total <= 7) {
+      return Array.from(
+        {
+          length: total,
+        },
+        (_, index) => index + 1,
+      );
     }
 
+    const pages = [1];
 
-    // ============================================================
-    // SIDEBAR
-    // ============================================================
-
-    function wireSidebar() {
-
-        document
-            .getElementById(
-                'sidebarToggle'
-            )
-            ?.addEventListener(
-                'click',
-                toggleSidebar
-            );
-
+    if (current > 4) {
+      pages.push("...");
     }
 
+    const start = Math.max(2, current - 1);
 
-    function toggleSidebar() {
+    const end = Math.min(total - 1, current + 1);
 
-        const sidebar =
-            document.getElementById(
-                'filterSidebar'
-            );
+    for (let page = start; page <= end; page++) {
+      pages.push(page);
+    }
 
+    if (current < total - 3) {
+      pages.push("...");
+    }
 
-        const content =
-            document.getElementById(
-                'sidebarContent'
-            );
+    pages.push(total);
 
+    return pages;
+  }
 
-        const title =
-            document.getElementById(
-                'sidebarTitle'
-            );
+  // ============================================================
+  // SIDEBAR
+  // ============================================================
 
+  function wireSidebar() {
+    document
+      .getElementById("sidebarToggle")
+      ?.addEventListener("click", toggleSidebar);
+  }
 
-        const icon =
-            document.getElementById(
-                'sidebarToggleIcon'
-            );
+  function toggleSidebar() {
+    const sidebar = document.getElementById("filterSidebar");
 
+    const content = document.getElementById("sidebarContent");
 
-        state.sidebarCollapsed =
-            !state.sidebarCollapsed;
+    const title = document.getElementById("sidebarTitle");
 
+    const icon = document.getElementById("sidebarToggleIcon");
 
-        if (
-            state.sidebarCollapsed
-        ) {
+    state.sidebarCollapsed = !state.sidebarCollapsed;
 
-            sidebar?.classList.remove(
-                'w-48'
-            );
+    if (state.sidebarCollapsed) {
+      sidebar?.classList.remove("w-48");
 
-            sidebar?.classList.add(
-                'w-10'
-            );
+      sidebar?.classList.add("w-10");
 
+      content?.classList.add("hidden");
 
-            content?.classList.add(
-                'hidden'
-            );
+      title?.classList.add("hidden");
 
-
-            title?.classList.add(
-                'hidden'
-            );
-
-
-            if (icon) {
-
-                icon.innerHTML = `
+      if (icon) {
+        icon.innerHTML = `
                 <path d="m9 18 6-6-6-6"/>
             `;
+      }
+    } else {
+      sidebar?.classList.remove("w-10");
 
-            }
+      sidebar?.classList.add("w-48");
 
-        } else {
+      content?.classList.remove("hidden");
 
-            sidebar?.classList.remove(
-                'w-10'
-            );
+      title?.classList.remove("hidden");
 
-            sidebar?.classList.add(
-                'w-48'
-            );
-
-
-            content?.classList.remove(
-                'hidden'
-            );
-
-
-            title?.classList.remove(
-                'hidden'
-            );
-
-
-            if (icon) {
-
-                icon.innerHTML = `
+      if (icon) {
+        icon.innerHTML = `
                 <path d="m15 18-6-6 6-6"/>
             `;
-
-            }
-
-        }
-
+      }
     }
+  }
 
+  function renderSidebar() {
+    renderTags();
 
-    function renderSidebar() {
+    renderSegments();
 
-        renderTags();
+    updateStats();
+  }
 
-        renderSegments();
+  function renderTags() {
+    const container = document.getElementById("tagsContainer");
 
-        updateStats();
+    if (!container) return;
 
-    }
+    const counts = {};
 
+    state.folders.forEach((folder) => {
+      const tags = Array.isArray(folder.tags) ? folder.tags : [];
 
-    function renderTags() {
+      tags.forEach((tag) => {
+        if (!tag) return;
 
-        const container =
-            document.getElementById(
-                'tagsContainer'
-            );
+        counts[tag] = (counts[tag] || 0) + 1;
+      });
+    });
 
+    container.innerHTML = "";
 
-        if (!container) return;
+    Object.entries(counts)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .forEach(([tag, count]) => {
+        const wrapper = document.createElement("label");
 
+        wrapper.className = "group flex cursor-pointer items-center gap-2";
 
-        const counts = {};
-
-
-        state.folders.forEach(
-            folder => {
-
-                const tags =
-                    Array.isArray(
-                        folder.tags
-                    )
-                        ? folder.tags
-                        : [];
-
-
-                tags.forEach(
-                    tag => {
-
-                        if (!tag) return;
-
-                        counts[tag] =
-                            (
-                                counts[tag] ||
-                                0
-                            ) + 1;
-
-                    }
-                );
-
-            }
-        );
-
-
-        container.innerHTML = '';
-
-
-        Object.entries(
-            counts
-        )
-            .sort(
-                (a, b) =>
-                    a[0].localeCompare(
-                        b[0]
-                    )
-            )
-            .forEach(
-                ([tag, count]) => {
-
-                    const wrapper =
-                        document.createElement(
-                            'label'
-                        );
-
-
-                    wrapper.className =
-                        'group flex cursor-pointer items-center gap-2';
-
-
-                    wrapper.innerHTML = `
+        wrapper.innerHTML = `
 
                     <input
                         type="checkbox"
                         class="collection-tag-checkbox
                                h-3.5 w-3.5
                                accent-cyan-400"
-                        data-tag="${escapeAttr(
-                        tag
-                    )}"
+                        data-tag="${escapeAttr(tag)}"
                     >
 
                     <button
@@ -2252,9 +1261,7 @@
                                transition
                                hover:bg-sky-500/10
                                hover:text-sky-300"
-                        data-tag="${escapeAttr(
-                        tag
-                    )}"
+                        data-tag="${escapeAttr(tag)}"
                     >
                         ${escapeHtml(tag)}
 
@@ -2267,138 +1274,58 @@
 
                 `;
 
+        const checkbox = wrapper.querySelector(".collection-tag-checkbox");
 
-                    const checkbox =
-                        wrapper.querySelector(
-                            '.collection-tag-checkbox'
-                        );
+        const button = wrapper.querySelector(".collection-tag-filter");
 
+        checkbox.addEventListener("change", () => {
+          setTagFilter(tag, checkbox.checked);
+        });
 
-                    const button =
-                        wrapper.querySelector(
-                            '.collection-tag-filter'
-                        );
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
 
+          const enabled = !state.tags.has(tag);
 
-                    checkbox.addEventListener(
-                        'change',
-                        () => {
+          checkbox.checked = enabled;
 
-                            setTagFilter(
-                                tag,
-                                checkbox.checked
-                            );
+          setTagFilter(tag, enabled);
+        });
 
-                        }
-                    );
+        container.appendChild(wrapper);
+      });
+  }
 
+  function renderSegments() {
+    const container = document.getElementById("segmentsContainer");
 
-                    button.addEventListener(
-                        'click',
-                        event => {
+    if (!container) return;
 
-                            event.preventDefault();
+    const counts = {};
 
+    state.folders.forEach((folder) => {
+      getFolderSegments(folder).forEach((segment) => {
+        counts[segment] = (counts[segment] || 0) + 1;
+      });
+    });
 
-                            const enabled =
-                                !state.tags.has(
-                                    tag
-                                );
+    container.innerHTML = "";
 
+    Object.entries(counts)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .forEach(([segment, count]) => {
+        const wrapper = document.createElement("label");
 
-                            checkbox.checked =
-                                enabled;
+        wrapper.className = "group flex cursor-pointer items-center gap-2";
 
-
-                            setTagFilter(
-                                tag,
-                                enabled
-                            );
-
-                        }
-                    );
-
-
-                    container.appendChild(
-                        wrapper
-                    );
-
-                }
-            );
-
-    }
-
-
-    function renderSegments() {
-
-        const container =
-            document.getElementById(
-                'segmentsContainer'
-            );
-
-
-        if (!container) return;
-
-
-        const counts = {};
-
-
-        state.folders.forEach(
-            folder => {
-
-                getFolderSegments(
-                    folder
-                ).forEach(
-                    segment => {
-
-                        counts[segment] =
-                            (
-                                counts[segment] ||
-                                0
-                            ) + 1;
-
-                    }
-                );
-
-            }
-        );
-
-
-        container.innerHTML = '';
-
-
-        Object.entries(
-            counts
-        )
-            .sort(
-                (a, b) =>
-                    a[0].localeCompare(
-                        b[0]
-                    )
-            )
-            .forEach(
-                ([segment, count]) => {
-
-                    const wrapper =
-                        document.createElement(
-                            'label'
-                        );
-
-
-                    wrapper.className =
-                        'group flex cursor-pointer items-center gap-2';
-
-
-                    wrapper.innerHTML = `
+        wrapper.innerHTML = `
 
                     <input
                         type="checkbox"
                         class="collection-segment-checkbox
                                h-3.5 w-3.5
                                accent-cyan-400"
-                        data-segment="${escapeAttr(
-                        segment
-                    )}"
+                        data-segment="${escapeAttr(segment)}"
                     >
 
                     <button
@@ -2412,13 +1339,9 @@
                                transition
                                hover:bg-cyan-500/10
                                hover:text-cyan-300"
-                        data-segment="${escapeAttr(
-                        segment
-                    )}"
+                        data-segment="${escapeAttr(segment)}"
                     >
-                        ${escapeHtml(
-                        segment
-                    )}
+                        ${escapeHtml(segment)}
 
                         <span
                             class="text-slate-600"
@@ -2429,645 +1352,289 @@
 
                 `;
 
+        const checkbox = wrapper.querySelector(".collection-segment-checkbox");
 
-                    const checkbox =
-                        wrapper.querySelector(
-                            '.collection-segment-checkbox'
-                        );
+        const button = wrapper.querySelector(".collection-segment-filter");
 
+        checkbox.addEventListener("change", () => {
+          setSegmentFilter(segment, checkbox.checked);
+        });
 
-                    const button =
-                        wrapper.querySelector(
-                            '.collection-segment-filter'
-                        );
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
 
+          const enabled = !state.segments.has(segment);
 
-                    checkbox.addEventListener(
-                        'change',
-                        () => {
+          checkbox.checked = enabled;
 
-                            setSegmentFilter(
-                                segment,
-                                checkbox.checked
-                            );
+          setSegmentFilter(segment, enabled);
+        });
 
-                        }
-                    );
+        container.appendChild(wrapper);
+      });
+  }
 
-
-                    button.addEventListener(
-                        'click',
-                        event => {
-
-                            event.preventDefault();
-
-
-                            const enabled =
-                                !state.segments.has(
-                                    segment
-                                );
-
-
-                            checkbox.checked =
-                                enabled;
-
-
-                            setSegmentFilter(
-                                segment,
-                                enabled
-                            );
-
-                        }
-                    );
-
-
-                    container.appendChild(
-                        wrapper
-                    );
-
-                }
-            );
-
+  function setTagFilter(tag, enabled) {
+    if (enabled) {
+      state.tags.add(tag);
+    } else {
+      state.tags.delete(tag);
     }
 
+    state.page = 1;
 
-    function setTagFilter(
-        tag,
-        enabled
-    ) {
+    applyFilters();
+  }
 
-        if (enabled) {
-
-            state.tags.add(
-                tag
-            );
-
-        } else {
-
-            state.tags.delete(
-                tag
-            );
-
-        }
-
-
-        state.page = 1;
-
-        applyFilters();
-
+  function setSegmentFilter(segment, enabled) {
+    if (enabled) {
+      state.segments.add(segment);
+    } else {
+      state.segments.delete(segment);
     }
 
+    state.page = 1;
 
-    function setSegmentFilter(
-        segment,
-        enabled
-    ) {
+    applyFilters();
+  }
 
-        if (enabled) {
+  function syncSidebar() {
+    document
+      .querySelectorAll(".collection-tag-checkbox")
+      .forEach((checkbox) => {
+        checkbox.checked = state.tags.has(checkbox.dataset.tag);
+      });
 
-            state.segments.add(
-                segment
-            );
+    document
+      .querySelectorAll(".collection-segment-checkbox")
+      .forEach((checkbox) => {
+        checkbox.checked = state.segments.has(checkbox.dataset.segment);
+      });
+  }
 
-        } else {
+  // ============================================================
+  // STATS
+  // ============================================================
 
-            state.segments.delete(
-                segment
-            );
+  function updateStats() {
+    const folderStat = document.getElementById("folderStat");
 
-        }
+    const endpointStat = document.getElementById("endpointStat");
 
+    const tagStat = document.getElementById("tagStat");
 
-        state.page = 1;
+    const segmentStat = document.getElementById("segmentStat");
 
-        applyFilters();
+    const tags = new Set();
 
-    }
+    const segments = new Set();
 
+    let endpointCount = 0;
 
-    function syncSidebar() {
+    state.folders.forEach((folder) => {
+      const folderTags = Array.isArray(folder.tags) ? folder.tags : [];
 
-        document
-            .querySelectorAll(
-                '.collection-tag-checkbox'
-            )
-            .forEach(
-                checkbox => {
+      folderTags.forEach((tag) => tags.add(tag));
 
-                    checkbox.checked =
-                        state.tags.has(
-                            checkbox.dataset.tag
-                        );
+      const endpoints = Array.isArray(folder.endpoints) ? folder.endpoints : [];
 
-                }
-            );
+      endpointCount += endpoints.length;
 
-
-        document
-            .querySelectorAll(
-                '.collection-segment-checkbox'
-            )
-            .forEach(
-                checkbox => {
-
-                    checkbox.checked =
-                        state.segments.has(
-                            checkbox.dataset.segment
-                        );
-
-                }
-            );
-
-    }
-
-
-    // ============================================================
-    // STATS
-    // ============================================================
-
-    function updateStats() {
-
-        const folderStat =
-            document.getElementById(
-                'folderStat'
-            );
-
-
-        const endpointStat =
-            document.getElementById(
-                'endpointStat'
-            );
-
-
-        const tagStat =
-            document.getElementById(
-                'tagStat'
-            );
-
-
-        const segmentStat =
-            document.getElementById(
-                'segmentStat'
-            );
-
-
-        const tags =
-            new Set();
-
-
-        const segments =
-            new Set();
-
-
-        let endpointCount =
-            0;
-
-
-        state.folders.forEach(
-            folder => {
-
-                const folderTags =
-                    Array.isArray(
-                        folder.tags
-                    )
-                        ? folder.tags
-                        : [];
-
-
-                folderTags.forEach(
-                    tag =>
-                        tags.add(tag)
-                );
-
-
-                const endpoints =
-                    Array.isArray(
-                        folder.endpoints
-                    )
-                        ? folder.endpoints
-                        : [];
-
-
-                endpointCount +=
-                    endpoints.length;
-
-
-                endpoints.forEach(
-                    endpoint => {
-
-                        getEndpointSegments(
-                            endpoint.endpoint ||
-                            endpoint.endpoint_str
-                        ).forEach(
-                            segment =>
-                                segments.add(
-                                    segment
-                                )
-                        );
-
-                    }
-                );
-
-            }
+      endpoints.forEach((endpoint) => {
+        getEndpointSegments(endpoint.endpoint || endpoint.endpoint_str).forEach(
+          (segment) => segments.add(segment),
         );
+      });
+    });
 
-
-        if (folderStat) {
-
-            folderStat.textContent =
-                state.folders.length;
-
-        }
-
-
-        if (endpointStat) {
-
-            endpointStat.textContent =
-                endpointCount;
-
-        }
-
-
-        if (tagStat) {
-
-            tagStat.textContent =
-                tags.size;
-
-        }
-
-
-        if (segmentStat) {
-
-            segmentStat.textContent =
-                segments.size;
-
-        }
-
+    if (folderStat) {
+      folderStat.textContent = state.folders.length;
     }
 
-
-    // ============================================================
-    // ACTIVE FOLDER
-    // ============================================================
-
-    function renderActiveFolderIndicator() {
-
-        const active =
-            getFolder(
-                state.activeFolderId
-            );
-
-
-        const previous =
-            getFolder(
-                state.prevActiveFolderId
-            );
-
-
-        const activeLabel =
-            document.getElementById(
-                'activeFolderLabel'
-            );
-
-
-        const previousLabel =
-            document.getElementById(
-                'prevActiveFolderLabel'
-            );
-
-
-        if (activeLabel) {
-
-            activeLabel.textContent =
-                active
-                    ? active.name
-                    : 'None';
-
-        }
-
-
-        if (previousLabel) {
-
-            previousLabel.textContent =
-                previous
-                    ? `(prev: ${previous.name})`
-                    : '';
-
-        }
-
+    if (endpointStat) {
+      endpointStat.textContent = endpointCount;
     }
 
+    if (tagStat) {
+      tagStat.textContent = tags.size;
+    }
 
-    // ============================================================
-// ACTIVE FOLDER
-// ============================================================
+    if (segmentStat) {
+      segmentStat.textContent = segments.size;
+    }
+  }
 
-function renderActiveFolderIndicator() {
+  // ============================================================
+  // ACTIVE FOLDER
+  // ============================================================
 
-    const active =
-        getFolder(
-            state.activeFolderId
-        );
+  function renderActiveFolderIndicator() {
+    const active = getFolder(state.activeFolderId);
 
+    const previous = getFolder(state.prevActiveFolderId);
 
-    const previous =
-        getFolder(
-            state.prevActiveFolderId
-        );
+    const activeLabel = document.getElementById("activeFolderLabel");
 
-
-    const activeLabel =
-        document.getElementById(
-            'activeFolderLabel'
-        );
-
-
-    const previousLabel =
-        document.getElementById(
-            'prevActiveFolderLabel'
-        );
-
+    const previousLabel = document.getElementById("prevActiveFolderLabel");
 
     if (activeLabel) {
-
-        activeLabel.textContent =
-            active
-                ? active.name
-                : 'None';
-
+      activeLabel.textContent = active ? active.name : "None";
     }
-
 
     if (previousLabel) {
+      previousLabel.textContent = previous ? `(prev: ${previous.name})` : "";
+    }
+  }
 
-        previousLabel.textContent =
-            previous
-                ? `(prev: ${previous.name})`
-                : '';
+  // ============================================================
+  // ACTIVE FOLDER
+  // ============================================================
 
+  function renderActiveFolderIndicator() {
+    const active = getFolder(state.activeFolderId);
+
+    const previous = getFolder(state.prevActiveFolderId);
+
+    const activeLabel = document.getElementById("activeFolderLabel");
+
+    const previousLabel = document.getElementById("prevActiveFolderLabel");
+
+    if (activeLabel) {
+      activeLabel.textContent = active ? active.name : "None";
     }
 
-}
+    if (previousLabel) {
+      previousLabel.textContent = previous ? `(prev: ${previous.name})` : "";
+    }
+  }
 
-
-function setActiveFolder(
-    id
-) {
-
-    const folder =
-        getFolder(id);
-
+  function setActiveFolder(id) {
+    const folder = getFolder(id);
 
     if (!folder) return;
 
+    if (state.activeFolderId !== folder.id) {
+      state.prevActiveFolderId = state.activeFolderId;
 
-    if (
-        state.activeFolderId !==
-        folder.id
-    ) {
-
-        state.prevActiveFolderId =
-            state.activeFolderId;
-
-
-        state.activeFolderId =
-            folder.id;
-
+      state.activeFolderId = folder.id;
     }
-
 
     render();
+  }
 
-}
-
-
-/*
- * Load the selected collection into the backend
- * Active Collection workspace.
- *
- * This is different from merely selecting a row.
- * The backend must explicitly load the collection before
- * bookmark/save operations can persist into it.
- */
-async function loadCollectionIntoActive(
-    id
-) {
-
-    const folder =
-        getFolder(id);
-
+  /*
+   * Load the selected collection into the backend
+   * Active Collection workspace.
+   *
+   * This is different from merely selecting a row.
+   * The backend must explicitly load the collection before
+   * bookmark/save operations can persist into it.
+   */
+  async function loadCollectionIntoActive(id) {
+    const folder = getFolder(id);
 
     if (!folder) {
+      showAlert("Collection not found.");
 
-        showAlert(
-            'Collection not found.'
-        );
-
-        return false;
-
+      return false;
     }
 
+    const api = getApi();
 
-    const api =
-        getApi();
+    if (!api || typeof api.loadCollection !== "function") {
+      showAlert("Collection loading API is not available.");
 
-
-    if (
-        !api ||
-        typeof api.loadCollection !==
-        'function'
-    ) {
-
-        showAlert(
-            'Collection loading API is not available.'
-        );
-
-        return false;
-
+      return false;
     }
-
 
     try {
+      await api.loadCollection(folder.name);
 
-        await api.loadCollection(
-            folder.name
-        );
+      /*
+       * Loading succeeded, so this collection is now
+       * the collection represented by the Active Collection
+       * workspace.
+       */
+      if (state.activeFolderId !== folder.id) {
+        state.prevActiveFolderId = state.activeFolderId;
+      }
 
+      state.activeFolderId = folder.id;
 
-        /*
-         * Loading succeeded, so this collection is now
-         * the collection represented by the Active Collection
-         * workspace.
-         */
-        if (
-            state.activeFolderId !==
-            folder.id
-        ) {
+      render();
 
-            state.prevActiveFolderId =
-                state.activeFolderId;
-
-        }
-
-
-        state.activeFolderId =
-            folder.id;
-
-
-        render();
-
-
-        return true;
-
-
+      return true;
     } catch (error) {
+      console.error(
+        `Failed to load collection "${folder.name}" into Active Collection:`,
+        error,
+      );
 
-        console.error(
-            `Failed to load collection "${folder.name}" into Active Collection:`,
-            error
-        );
+      showAlert(
+        error?.message || `Failed to load collection "${folder.name}".`,
+      );
 
-
-        showAlert(
-            error?.message ||
-            `Failed to load collection "${folder.name}".`
-        );
-
-
-        return false;
-
+      return false;
     }
+  }
 
-}
+  // ============================================================
+  // SELECTION
+  // ============================================================
 
-    // ============================================================
-    // SELECTION
-    // ============================================================
+  function wireSelection() {
+    document
+      .getElementById("clearFolderSelection")
+      ?.addEventListener("click", clearSelection);
 
-    function wireSelection() {
-
-        document
-            .getElementById(
-                'clearFolderSelection'
-            )
-            ?.addEventListener(
-                'click',
-                clearSelection
-            );
-
-
-        document
-            .getElementById(
-                'selectAllFolders'
-            )
-            ?.addEventListener(
-                'change',
-                event => {
-
-                    currentPageItems()
-                        .forEach(
-                            folder => {
-
-                                if (
-                                    event.target.checked
-                                ) {
-
-                                    state.selected.add(
-                                        Number(folder.id)
-                                    );
-
-                                } else {
-
-                                    state.selected.delete(
-                                        Number(folder.id)
-                                    );
-
-                                }
-
-                            }
-                        );
-
-
-                    render();
-
-                }
-            );
-
-    }
-
-
-    function clearSelection() {
-
-        state.selected.clear();
+    document
+      .getElementById("selectAllFolders")
+      ?.addEventListener("change", (event) => {
+        currentPageItems().forEach((folder) => {
+          if (event.target.checked) {
+            state.selected.add(Number(folder.id));
+          } else {
+            state.selected.delete(Number(folder.id));
+          }
+        });
 
         render();
+      });
+  }
 
+  function clearSelection() {
+    state.selected.clear();
+
+    render();
+  }
+
+  function renderSelectionUI() {
+    const bar = document.getElementById("selectionBar");
+
+    const count = document.getElementById("selectedFolderCount");
+
+    const list = document.getElementById("selectedFolderList");
+
+    const selected = getSelectedFolders();
+
+    if (selected.length) {
+      bar?.classList.remove("hidden");
+
+      bar?.classList.add("flex");
+    } else {
+      bar?.classList.add("hidden");
+
+      bar?.classList.remove("flex");
     }
 
+    if (count) {
+      count.textContent = `${selected.length} selected`;
+    }
 
-    function renderSelectionUI() {
-
-        const bar =
-            document.getElementById(
-                'selectionBar'
-            );
-
-
-        const count =
-            document.getElementById(
-                'selectedFolderCount'
-            );
-
-
-        const list =
-            document.getElementById(
-                'selectedFolderList'
-            );
-
-
-        const selected =
-            getSelectedFolders();
-
-
-        if (
-            selected.length
-        ) {
-
-            bar?.classList.remove(
-                'hidden'
-            );
-
-            bar?.classList.add(
-                'flex'
-            );
-
-        } else {
-
-            bar?.classList.add(
-                'hidden'
-            );
-
-            bar?.classList.remove(
-                'flex'
-            );
-
-        }
-
-
-        if (count) {
-
-            count.textContent =
-                `${selected.length} selected`;
-
-        }
-
-
-        if (list) {
-
-            list.innerHTML =
-                selected
-                    .map(
-                        folder => `
+    if (list) {
+      list.innerHTML = selected
+        .map(
+          (folder) => `
 
                         <span
                             class="shrink-0
@@ -3080,836 +1647,408 @@ async function loadCollectionIntoActive(
                                    text-[10px]
                                    text-cyan-300"
                         >
-                            ${escapeHtml(
-                            folder.name
-                        )}
+                            ${escapeHtml(folder.name)}
                         </span>
 
-                    `
-                    )
-                    .join('');
-
-        }
-
+                    `,
+        )
+        .join("");
     }
+  }
 
+  function updateSelectAllState() {
+    const selectAll = document.getElementById("selectAllFolders");
 
-    function updateSelectAllState() {
+    if (!selectAll) return;
 
-        const selectAll =
-            document.getElementById(
-                'selectAllFolders'
-            );
+    const items = currentPageItems();
 
+    const selectedCount = items.filter((folder) =>
+      state.selected.has(Number(folder.id)),
+    ).length;
 
-        if (!selectAll) return;
+    selectAll.checked = items.length > 0 && selectedCount === items.length;
 
+    selectAll.indeterminate = selectedCount > 0 && selectedCount < items.length;
+  }
 
-        const items =
-            currentPageItems();
+  function getSelectedFolders() {
+    return state.folders.filter((folder) =>
+      state.selected.has(Number(folder.id)),
+    );
+  }
 
+  // ============================================================
+  // TOOLBAR
+  // ============================================================
 
-        const selectedCount =
-            items.filter(
-                folder =>
-                    state.selected.has(
-                        Number(folder.id)
-                    )
-            ).length;
-
-
-        selectAll.checked =
-            items.length > 0 &&
-            selectedCount ===
-            items.length;
-
-
-        selectAll.indeterminate =
-            selectedCount > 0 &&
-            selectedCount <
-            items.length;
-
-    }
-
-
-    function getSelectedFolders() {
-
-        return state.folders.filter(
-            folder =>
-                state.selected.has(
-                    Number(folder.id)
-                )
-        );
-
-    }
-
-
-    // ============================================================
-    // TOOLBAR
-    // ============================================================
-
-    function wireToolbar() {
-
-        document
-            .getElementById(
-                'collectionSearch'
-            )
-            ?.addEventListener(
-                'input',
-                event => {
-
-                    state.search =
-                        event.target.value;
-
-                    state.page = 1;
-
-                    applyFilters();
-
-                }
-            );
-
-
-        document
-            .getElementById(
-                'purposeFilter'
-            )
-            ?.addEventListener(
-                'change',
-                event => {
-
-                    state.purpose =
-                        event.target.value;
-
-                    state.page = 1;
-
-                    applyFilters();
-
-                }
-            );
-
-
-        document
-            .getElementById(
-                'resetFilters'
-            )
-            ?.addEventListener(
-                'click',
-                resetFilters
-            );
-
-
-        document
-            .getElementById(
-                'newCollectionBtn'
-            )
-            ?.addEventListener(
-                'click',
-                openNewFolderModal
-            );
-
-
-        document
-            .getElementById(
-                'importBtn'
-            )
-            ?.addEventListener(
-                'click',
-                openImportModal
-            );
-
-
-        document
-            .getElementById(
-                'exportBtn'
-            )
-            ?.addEventListener(
-                'click',
-                openExportModal
-            );
-
-
-        document
-            .getElementById(
-                'paginationPrev'
-            )
-            ?.addEventListener(
-                'click',
-                () => {
-
-                    if (
-                        state.page > 1
-                    ) {
-
-                        state.page--;
-
-                        render();
-
-                    }
-
-                }
-            );
-
-
-        document
-            .getElementById(
-                'paginationNext'
-            )
-            ?.addEventListener(
-                'click',
-                () => {
-
-                    const totalPages =
-                        getTotalPages();
-
-
-                    if (
-                        state.page <
-                        totalPages
-                    ) {
-
-                        state.page++;
-
-                        render();
-
-                    }
-
-                }
-            );
-
-    }
-
-
-    function resetFilters() {
-
-        state.search = '';
-
-        state.purpose = 'all';
-
-        state.tags.clear();
-
-        state.segments.clear();
+  function wireToolbar() {
+    document
+      .getElementById("collectionSearch")
+      ?.addEventListener("input", (event) => {
+        state.search = event.target.value;
 
         state.page = 1;
 
+        applyFilters();
+      });
 
-        const search =
-            document.getElementById(
-                'collectionSearch'
-            );
+    document
+      .getElementById("purposeFilter")
+      ?.addEventListener("change", (event) => {
+        state.purpose = event.target.value;
 
-
-        if (search) {
-
-            search.value = '';
-
-        }
-
-
-        const purpose =
-            document.getElementById(
-                'purposeFilter'
-            );
-
-
-        if (purpose) {
-
-            purpose.value =
-                'all';
-
-        }
-
+        state.page = 1;
 
         applyFilters();
+      });
 
+    document
+      .getElementById("resetFilters")
+      ?.addEventListener("click", resetFilters);
+
+    document
+      .getElementById("newCollectionBtn")
+      ?.addEventListener("click", openNewFolderModal);
+
+    document
+      .getElementById("importBtn")
+      ?.addEventListener("click", openImportModal);
+
+    document
+      .getElementById("exportBtn")
+      ?.addEventListener("click", openExportModal);
+
+    document.getElementById("paginationPrev")?.addEventListener("click", () => {
+      if (state.page > 1) {
+        state.page--;
+
+        render();
+      }
+    });
+
+    document.getElementById("paginationNext")?.addEventListener("click", () => {
+      const totalPages = getTotalPages();
+
+      if (state.page < totalPages) {
+        state.page++;
+
+        render();
+      }
+    });
+  }
+
+  function resetFilters() {
+    state.search = "";
+
+    state.purpose = "all";
+
+    state.tags.clear();
+
+    state.segments.clear();
+
+    state.page = 1;
+
+    const search = document.getElementById("collectionSearch");
+
+    if (search) {
+      search.value = "";
     }
 
+    const purpose = document.getElementById("purposeFilter");
 
-    // ============================================================
-    // TABLE EVENTS
-    // ============================================================
+    if (purpose) {
+      purpose.value = "all";
+    }
 
-    function wireTableEvents() {
+    applyFilters();
+  }
 
-        const tbody =
-            document.getElementById(
-                'folderTableBody'
-            );
+  // ============================================================
+  // TABLE EVENTS
+  // ============================================================
 
+  function wireTableEvents() {
+    const tbody = document.getElementById("folderTableBody");
 
-        if (!tbody) return;
+    if (!tbody) return;
 
+    tbody.addEventListener("contextmenu", () => {
+      /*
+       * rmbcv.js owns the actual context menu.
+       */
+    });
+  }
 
-        tbody.addEventListener(
-            'contextmenu',
-            () => {
+  // ============================================================
+  // FOLDER OPERATIONS
+  // ============================================================
 
-                /*
-                 * rmbcv.js owns the actual context menu.
-                 */
+  function getFolder(id) {
+    return state.folders.find((folder) => Number(folder.id) === Number(id));
+  }
 
-            }
+  async function duplicateFolder(id) {
+    const folder = getFolder(id);
+
+    if (!folder) return;
+
+    const api = getApi();
+
+    if (!api || typeof api.createCollection !== "function") {
+      showAlert("Collection API is not available.");
+
+      return;
+    }
+
+    const name = `${folder.name} (copy)`;
+
+    try {
+      const response = await api.createCollection(name);
+
+      if (response?.ok === false) {
+        throw new Error(
+          `Failed to create collection (${response.status ?? "unknown"})`,
         );
+      }
 
-    }
+      /*
+       * Copy actual endpoint membership using the backend
+       * collection API.
+       */
+      if (typeof api.addEndpointToCollection === "function") {
+        for (const endpoint of folder.endpoints || []) {
+          const endpointId = endpoint.endpoint_id ?? endpoint.id;
 
+          if (!endpointId) {
+            continue;
+          }
 
-    // ============================================================
-    // FOLDER OPERATIONS
-    // ============================================================
+          const result = await api.addEndpointToCollection(name, endpointId);
 
-    function getFolder(
-        id
-    ) {
-
-        return state.folders.find(
-            folder =>
-                Number(folder.id) ===
-                Number(id)
-        );
-
-    }
-
-
-    async function duplicateFolder(
-        id
-    ) {
-
-        const folder =
-            getFolder(id);
-
-
-        if (!folder) return;
-
-
-        const api =
-            getApi();
-
-
-        if (
-            !api ||
-            typeof api.createCollection !==
-            'function'
-        ) {
-
-            showAlert(
-                'Collection API is not available.'
-            );
-
-            return;
-
-        }
-
-
-        const name =
-            `${folder.name} (copy)`;
-
-
-        try {
-
-            const response =
-                await api.createCollection(
-                    name
-                );
-
-
-            if (
-                response?.ok === false
-            ) {
-
-                throw new Error(
-                    `Failed to create collection (${response.status ?? 'unknown'})`
-                );
-
-            }
-
-
-            /*
-             * Copy actual endpoint membership using the backend
-             * collection API.
-             */
-            if (
-                typeof api.addEndpointToCollection ===
-                'function'
-            ) {
-
-                for (
-                    const endpoint of
-                    folder.endpoints || []
-                ) {
-
-                    const endpointId =
-                        endpoint.endpoint_id ??
-                        endpoint.id;
-
-
-                    if (!endpointId) {
-                        continue;
-                    }
-
-
-                    const result =
-                        await api.addEndpointToCollection(
-                            name,
-                            endpointId
-                        );
-
-
-                    if (
-                        result?.ok === false
-                    ) {
-
-                        console.error(
-                            `Failed to copy endpoint ${endpointId} to ${name}`,
-                            result
-                        );
-
-                    }
-
-                }
-
-            }
-
-
-            /*
-             * Copy actual membership tags.
-             */
-            if (
-                typeof api.addMembershipTag ===
-                'function'
-            ) {
-
-                for (
-                    const tag of
-                    folder.tags || []
-                ) {
-
-                    const result =
-                        await api.addMembershipTag(
-                            name,
-                            tag
-                        );
-
-
-                    if (
-                        result?.ok === false
-                    ) {
-
-                        console.error(
-                            `Failed to copy tag ${tag} to ${name}`,
-                            result
-                        );
-
-                    }
-
-                }
-
-            }
-
-
-            await loadFolders();
-
-            renderSidebar();
-
-            applyFilters();
-
-
-        } catch (error) {
-
+          if (result?.ok === false) {
             console.error(
-                'Failed to duplicate collection:',
-                error
+              `Failed to copy endpoint ${endpointId} to ${name}`,
+              result,
             );
-
-            showAlert(
-                `Failed to duplicate collection: ${error.message}`
-            );
-
+          }
         }
+      }
 
+      /*
+       * Copy actual membership tags.
+       */
+      if (typeof api.addMembershipTag === "function") {
+        for (const tag of folder.tags || []) {
+          const result = await api.addMembershipTag(name, tag);
+
+          if (result?.ok === false) {
+            console.error(`Failed to copy tag ${tag} to ${name}`, result);
+          }
+        }
+      }
+
+      await loadFolders();
+
+      renderSidebar();
+
+      applyFilters();
+    } catch (error) {
+      console.error("Failed to duplicate collection:", error);
+
+      showAlert(`Failed to duplicate collection: ${error.message}`);
+    }
+  }
+
+  async function createFolder(name, purpose, tags, annotation) {
+    const collectionName = String(name || "").trim();
+
+    if (!collectionName) {
+      return;
     }
 
+    const api = getApi();
 
-    async function createFolder(
-        name,
-        purpose,
-        tags,
-        annotation
-    ) {
+    if (!api || typeof api.createCollection !== "function") {
+      showAlert("Collection API is not available.");
 
-        const collectionName =
-            String(name || '')
-                .trim();
-
-
-        if (!collectionName) {
-
-            return;
-
-        }
-
-
-        const api =
-            getApi();
-
-
-        if (
-            !api ||
-            typeof api.createCollection !==
-            'function'
-        ) {
-
-            showAlert(
-                'Collection API is not available.'
-            );
-
-            return;
-
-        }
-
-
-        try {
-
-            const response =
-                await api.createCollection(
-                    collectionName
-                );
-
-
-            if (
-                response?.ok === false
-            ) {
-
-                throw new Error(
-                    `Failed to create collection (${response.status ?? 'unknown'})`
-                );
-
-            }
-
-
-            /*
-             * Purpose and annotation are intentionally ignored:
-             * there is no corresponding backend collection field/API.
-             */
-
-
-            const collectionTags =
-                String(tags || '')
-                    .split(',')
-                    .map(
-                        tag =>
-                            tag.trim()
-                    )
-                    .filter(Boolean);
-
-
-            if (
-                typeof api.addMembershipTag ===
-                'function'
-            ) {
-
-                for (
-                    const tag of collectionTags
-                ) {
-
-                    const tagResponse =
-                        await api.addMembershipTag(
-                            collectionName,
-                            tag
-                        );
-
-
-                    if (
-                        tagResponse?.ok === false
-                    ) {
-
-                        console.error(
-                            `Failed to add tag ${tag}:`,
-                            tagResponse
-                        );
-
-                    }
-
-                }
-
-            }
-
-
-            await loadFolders();
-
-            renderSidebar();
-
-            applyFilters();
-
-
-        } catch (error) {
-
-            console.error(
-                'Failed to create collection:',
-                error
-            );
-
-            showAlert(
-                `Failed to create collection: ${error.message}`
-            );
-
-        }
-
+      return;
     }
 
+    try {
+      const response = await api.createCollection(collectionName);
 
-    async function deleteFolders(
-        ids
-    ) {
-
-        const targets =
-            ids
-                .map(getFolder)
-                .filter(Boolean);
-
-
-        if (!targets.length) {
-            return;
-        }
-
-
-        const results =
-            await Promise.allSettled(
-                targets.map(
-                    folder =>
-                        deleteFolderOnBackend(
-                            folder
-                        )
-                )
-            );
-
-
-        const succeededNames = [];
-
-        const failedNames = [];
-
-
-        results.forEach(
-            (result, index) => {
-
-                const folder =
-                    targets[index];
-
-
-                if (
-                    result.status ===
-                    'fulfilled' &&
-                    result.value?.ok !== false
-                ) {
-
-                    succeededNames.push(
-                        folder.name
-                    );
-
-                } else {
-
-                    failedNames.push(
-                        folder.name
-                    );
-
-                }
-
-            }
+      if (response?.ok === false) {
+        throw new Error(
+          `Failed to create collection (${response.status ?? "unknown"})`,
         );
+      }
 
+      /*
+       * Purpose and annotation are intentionally ignored:
+       * there is no corresponding backend collection field/API.
+       */
 
-        if (failedNames.length) {
+      const collectionTags = String(tags || "")
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean);
 
-            showAlert(
-                `Failed to delete on server: ${failedNames.join(', ')}`
-            );
+      if (typeof api.addMembershipTag === "function") {
+        for (const tag of collectionTags) {
+          const tagResponse = await api.addMembershipTag(collectionName, tag);
 
+          if (tagResponse?.ok === false) {
+            console.error(`Failed to add tag ${tag}:`, tagResponse);
+          }
         }
+      }
 
+      await loadFolders();
 
-        if (succeededNames.length) {
+      renderSidebar();
 
-            const deletedIds =
-                targets
-                    .filter(
-                        folder =>
-                            succeededNames.includes(
-                                folder.name
-                            )
-                    )
-                    .map(
-                        folder =>
-                            Number(folder.id)
-                    );
+      applyFilters();
+    } catch (error) {
+      console.error("Failed to create collection:", error);
 
+      showAlert(`Failed to create collection: ${error.message}`);
+    }
+  }
 
-            deletedIds.forEach(
-                id =>
-                    state.selected.delete(id)
-            );
+  async function deleteFolders(ids) {
+    const targets = ids.map(getFolder).filter(Boolean);
 
-
-            if (
-                deletedIds.includes(
-                    Number(
-                        state.activeFolderId
-                    )
-                )
-            ) {
-
-                state.activeFolderId =
-                    null;
-
-            }
-
-
-            if (
-                deletedIds.includes(
-                    Number(
-                        state.prevActiveFolderId
-                    )
-                )
-            ) {
-
-                state.prevActiveFolderId =
-                    null;
-
-            }
-
-        }
-
-
-        await loadFolders();
-
-        renderSidebar();
-
-        applyFilters();
-
+    if (!targets.length) {
+      return;
     }
 
+    const results = await Promise.allSettled(
+      targets.map((folder) => deleteFolderOnBackend(folder)),
+    );
 
-    async function deleteFolderOnBackend(
-        folder
-    ) {
+    const succeededNames = [];
 
-        const api =
-            getApi();
+    const failedNames = [];
 
+    results.forEach((result, index) => {
+      const folder = targets[index];
 
-        if (
-            !api ||
-            typeof api.deleteCollection !==
-            'function'
-        ) {
+      if (result.status === "fulfilled" && result.value?.ok !== false) {
+        succeededNames.push(folder.name);
+      } else {
+        failedNames.push(folder.name);
+      }
+    });
 
-            throw new Error(
-                'EdmsAPI.deleteCollection() is not available.'
-            );
-
-        }
-
-
-        const response =
-            await api.deleteCollection(
-                folder.name
-            );
-
-
-        if (
-            response?.ok === false
-        ) {
-
-            throw new Error(
-                `HTTP ${response.status ?? 'unknown'}`
-            );
-
-        }
-
-
-        return response;
-
+    if (failedNames.length) {
+      showAlert(`Failed to delete on server: ${failedNames.join(", ")}`);
     }
 
+    if (succeededNames.length) {
+      const deletedIds = targets
+        .filter((folder) => succeededNames.includes(folder.name))
+        .map((folder) => Number(folder.id));
 
-    // ============================================================
-    // MERGE
-    // ============================================================
+      deletedIds.forEach((id) => state.selected.delete(id));
 
-    function openMergeModal(
-        ids
-    ) {
+      if (deletedIds.includes(Number(state.activeFolderId))) {
+        state.activeFolderId = null;
+      }
 
-        const uniqueIds =
-            [
-                ...new Set(
-                    ids.map(Number)
-                )
-            ];
-
-
-        const sourceFolders =
-            uniqueIds
-                .map(getFolder)
-                .filter(Boolean);
-
-
-        if (
-            sourceFolders.length <
-            2
-        ) {
-
-            showAlert(
-                'Select at least two folders to merge.'
-            );
-
-            return;
-
-        }
-
-
-        /*
-         * There is no backend merge endpoint in the supplied API.
-         * Do not create a fake local collection because the backend
-         * is the source of truth.
-         */
-        showAlert(
-            'Merge is not available through the backend API yet.'
-        );
-
+      if (deletedIds.includes(Number(state.prevActiveFolderId))) {
+        state.prevActiveFolderId = null;
+      }
     }
 
+    await loadFolders();
 
-    // ============================================================
-    // DATA VIEW
-    // ============================================================
+    renderSidebar();
 
-    function openDataView(
-        id
-    ) {
+    applyFilters();
+  }
 
-        const folder =
-            getFolder(id);
+  async function deleteFolderOnBackend(folder) {
+    const api = getApi();
 
-
-        if (!folder) {
-            return;
-        }
-
-
-        window.open(
-            `./collection_dataview.html?folder=${encodeURIComponent(folder.name)}`,
-            '_blank'
-        );
-
+    if (!api || typeof api.deleteCollection !== "function") {
+      throw new Error("EdmsAPI.deleteCollection() is not available.");
     }
 
+    const response = await api.deleteCollection(folder.name);
 
-    // ============================================================
-    // NEW FOLDER
-    // ============================================================
+    if (response?.ok === false) {
+      throw new Error(`HTTP ${response.status ?? "unknown"}`);
+    }
 
-    function openNewFolderModal() {
+    return response;
+  }
 
-        openModal(`
+  // ============================================================
+  // MERGE
+  // ============================================================
+
+  function openMergeModal(ids) {
+    const uniqueIds = [...new Set(ids.map(Number))];
+
+    const sourceFolders = uniqueIds.map(getFolder).filter(Boolean);
+
+    if (sourceFolders.length < 2) {
+      showAlert("Select at least two folders to merge.");
+
+      return;
+    }
+
+    /*
+     * There is no backend merge endpoint in the supplied API.
+     * Do not create a fake local collection because the backend
+     * is the source of truth.
+     */
+    showAlert("Merge is not available through the backend API yet.");
+  }
+
+  // ============================================================
+  // TEST VIEW
+  // ============================================================
+
+  function openTestView(id) {
+    const folder = getFolder(id);
+
+    if (!folder) {
+      return;
+    }
+
+    window.open(
+      `./testview.html?collection=${encodeURIComponent(folder.name)}`,
+      "_blank",
+    );
+  }
+
+
+
+  // ============================================================
+  // DATA VIEW
+  // ============================================================
+
+  function openDataView(id) {
+    const folder = getFolder(id);
+
+    if (!folder) {
+      return;
+    }
+
+    window.open(
+      `./collection_dataview.html?folder=${encodeURIComponent(folder.name)}`,
+      "_blank",
+    );
+  }
+
+  // ============================================================
+  // NEW FOLDER
+  // ============================================================
+
+  function openNewFolderModal() {
+    openModal(`
 
         <h2
             class="mb-4 text-sm font-semibold
@@ -4035,82 +2174,39 @@ async function loadCollectionIntoActive(
 
     `);
 
+    document
+      .getElementById("confirmNewFolder")
+      ?.addEventListener("click", async () => {
+        const button = document.getElementById("confirmNewFolder");
 
-        document
-            .getElementById(
-                'confirmNewFolder'
-            )
-            ?.addEventListener(
-                'click',
-                async () => {
+        button.disabled = true;
 
-                    const button =
-                        document.getElementById(
-                            'confirmNewFolder'
-                        );
+        button.textContent = "Creating…";
 
+        await createFolder(
+          document.getElementById("newFolderName").value,
 
-                    button.disabled =
-                        true;
+          document.getElementById("newFolderPurpose").value,
 
+          document.getElementById("newFolderTags").value,
 
-                    button.textContent =
-                        'Creating…';
+          document.getElementById("newFolderAnnotation").value,
+        );
 
+        closeModal();
+      });
+  }
 
-                    await createFolder(
+  // ============================================================
+  // RENAME
+  // ============================================================
 
-                        document
-                            .getElementById(
-                                'newFolderName'
-                            )
-                            .value,
+  function openRenameModal(id) {
+    const folder = getFolder(id);
 
-                        document
-                            .getElementById(
-                                'newFolderPurpose'
-                            )
-                            .value,
+    if (!folder) return;
 
-                        document
-                            .getElementById(
-                                'newFolderTags'
-                            )
-                            .value,
-
-                        document
-                            .getElementById(
-                                'newFolderAnnotation'
-                            )
-                            .value
-
-                    );
-
-
-                    closeModal();
-
-                }
-            );
-
-    }
-
-
-    // ============================================================
-    // RENAME
-    // ============================================================
-
-    function openRenameModal(
-        id
-    ) {
-
-        const folder =
-            getFolder(id);
-
-
-        if (!folder) return;
-
-
-        openModal(`
+    openModal(`
 
         <h2
             class="mb-4 text-sm font-semibold
@@ -4122,9 +2218,7 @@ async function loadCollectionIntoActive(
 
         <input
             id="renameInput"
-            value="${escapeAttr(
-            folder.name
-        )}"
+            value="${escapeAttr(folder.name)}"
             class="mb-4 h-9 w-full
                    rounded-md
                    border border-slate-700
@@ -4169,155 +2263,101 @@ async function loadCollectionIntoActive(
 
     `);
 
+    document
+      .getElementById("confirmRename")
+      ?.addEventListener("click", async () => {
+        const name = document.getElementById("renameInput").value.trim();
 
-        document
-            .getElementById(
-                'confirmRename'
-            )
-            ?.addEventListener(
-                'click',
-                async () => {
+        if (!name) {
+          showAlert("Collection name cannot be empty.");
 
-                    const name =
-                        document
-                            .getElementById(
-                                'renameInput'
-                            )
-                            .value
-                            .trim();
+          return;
+        }
 
+        const api = getApi();
 
-                    if (!name) {
+        if (!api || typeof api.renameCollection !== "function") {
+          showAlert("Collection API is not available.");
 
-                        showAlert(
-                            'Collection name cannot be empty.'
-                        );
+          return;
+        }
 
-                        return;
+        try {
+          const response = await api.renameCollection(folder.name, name);
 
-                    }
+          if (response?.ok === false) {
+            throw new Error(`HTTP ${response.status ?? "unknown"}`);
+          }
 
+          closeModal();
 
-                    const api =
-                        getApi();
+          await loadFolders();
 
+          renderSidebar();
 
-                    if (
-                        !api ||
-                        typeof api.renameCollection !==
-                        'function'
-                    ) {
+          applyFilters();
+        } catch (error) {
+          console.error("Failed to rename collection:", error);
 
-                        showAlert(
-                            'Collection API is not available.'
-                        );
+          showAlert(`Failed to rename collection: ${error.message}`);
+        }
+      });
+  }
 
-                        return;
+  // ============================================================
+  // TAG EDITOR
+  // ============================================================
 
-                    }
+  function openTagEditor(id) {
+    const folder = getFolder(id);
 
+    if (!folder) return;
 
-                    try {
+    const currentTags = Array.isArray(folder.tags)
+      ? folder.tags.join(", ")
+      : "";
+    const currentAnnotation = folder.annotation || "";
 
-                        const response =
-                            await api.renameCollection(
-                                folder.name,
-                                name
-                            );
-
-
-                        if (
-                            response?.ok === false
-                        ) {
-
-                            throw new Error(
-                                `HTTP ${response.status ?? 'unknown'}`
-                            );
-
-                        }
-
-
-                        closeModal();
-
-                        await loadFolders();
-
-                        renderSidebar();
-
-                        applyFilters();
-
-
-                    } catch (error) {
-
-                        console.error(
-                            'Failed to rename collection:',
-                            error
-                        );
-
-                        showAlert(
-                            `Failed to rename collection: ${error.message}`
-                        );
-
-                    }
-
-                }
-            );
-
-    }
-
-
-    // ============================================================
-    // TAG EDITOR
-    // ============================================================
-
-    function openTagEditor(
-        id
-    ) {
-
-        const folder =
-            getFolder(id);
-
-
-        if (!folder) return;
-
-
-        const currentTags =
-            Array.isArray(
-                folder.tags
-            )
-                ? folder.tags.join(', ')
-                : '';
-
-
-        openModal(`
+    openModal(`
 
         <h2
             class="mb-4 text-sm font-semibold
                    text-white"
         >
-            Edit Tags
+            Collection — ${escapeHtml(folder.name)}
         </h2>
 
 
-        <input
-            id="collectionTagInput"
-            value="${escapeAttr(
-            currentTags
-        )}"
-            class="h-9 w-full
-                   rounded-md
-                   border border-slate-700
-                   bg-slate-950 px-3
-                   text-xs outline-none
-                   focus:border-cyan-500"
-        >
+        <div class="space-y-4">
+            <div>
+                <label class="mb-1 block text-xs text-slate-500">Tags</label>
+                <input
+                    id="collectionTagInput"
+                    value="${escapeAttr(currentTags)}"
+                    class="h-9 w-full
+                           rounded-md
+                           border border-slate-700
+                           bg-slate-950 px-3
+                           text-xs outline-none
+                           focus:border-cyan-500"
+                >
+                <p
+                    class="mt-1 text-[10px]
+                           text-slate-600"
+                >
+                    Separate tags with commas.
+                </p>
+            </div>
 
-
-        <p
-            class="mt-1 text-[10px]
-                   text-slate-600"
-        >
-            Separate tags with commas.
-        </p>
+            <div>
+                <label class="mb-1 block text-xs text-slate-500">Annotation</label>
+                <textarea
+                    id="collectionAnnotationInput"
+                    class="h-20 w-full rounded-md border border-slate-700 bg-slate-950 p-2 text-xs outline-none focus:border-cyan-500"
+                    placeholder="Optional notes..."
+                >${escapeHtml(currentAnnotation)}</textarea>
+            </div>
+        </div>
 
 
         <div
@@ -4355,156 +2395,81 @@ async function loadCollectionIntoActive(
 
     `);
 
+    document
+      .getElementById("saveCollectionTags")
+      ?.addEventListener("click", async () => {
+        const api = getApi();
 
-        document
-            .getElementById(
-                'saveCollectionTags'
-            )
-            ?.addEventListener(
-                'click',
-                async () => {
+        if (
+          !api ||
+          typeof api.addMembershipTag !== "function" ||
+          typeof api.removeMembershipTag !== "function"
+        ) {
+          showAlert("Membership tag API is not available.");
 
-                    const api =
-                        getApi();
+          return;
+        }
 
+        const input = document.getElementById("collectionTagInput").value;
+        const annotationInput = document.getElementById("collectionAnnotationInput").value;
 
-                    if (
-                        !api ||
-                        typeof api.addMembershipTag !==
-                        'function' ||
-                        typeof api.removeMembershipTag !==
-                        'function'
-                    ) {
+        const newTags = [
+          ...new Set(
+            input
+              .split(",")
+              .map((tag) => tag.trim())
+              .filter(Boolean),
+          ),
+        ];
 
-                        showAlert(
-                            'Membership tag API is not available.'
-                        );
+        const oldTags = Array.isArray(folder.tags) ? [...folder.tags] : [];
 
-                        return;
+        try {
+          const toRemove = oldTags.filter((tag) => !newTags.includes(tag));
 
-                    }
+          const toAdd = newTags.filter((tag) => !oldTags.includes(tag));
 
+          for (const tag of toRemove) {
+            await api.removeMembershipTag(folder.name, tag);
+          }
 
-                    const input =
-                        document
-                            .getElementById(
-                                'collectionTagInput'
-                            )
-                            .value;
+          for (const tag of toAdd) {
+            await api.addMembershipTag(folder.name, tag);
+          }
 
+          if (annotationInput !== currentAnnotation && typeof api.setCollectionAnnotation === "function") {
+            await api.setCollectionAnnotation(folder.name, annotationInput);
+            folder.annotation = annotationInput;
+          } else if (annotationInput !== currentAnnotation) {
+            // Fallback for UI if API is missing (matches previous logic)
+            folder.annotation = annotationInput;
+          }
 
-                    const newTags =
-                        [
-                            ...new Set(
-                                input
-                                    .split(',')
-                                    .map(
-                                        tag =>
-                                            tag.trim()
-                                    )
-                                    .filter(Boolean)
-                            )
-                        ];
+          closeModal();
 
+          await loadFolders();
 
-                    const oldTags =
-                        Array.isArray(
-                            folder.tags
-                        )
-                            ? [...folder.tags]
-                            : [];
+          renderSidebar();
 
+          applyFilters();
+        } catch (error) {
+          console.error("Failed to update collection:", error);
 
-                    try {
+          showAlert(`Failed to update collection: ${error.message}`);
+        }
+      });
+  }
 
-                        const toRemove =
-                            oldTags.filter(
-                                tag =>
-                                    !newTags.includes(
-                                        tag
-                                    )
-                            );
+  // ============================================================
+  // ANNOTATION EDITOR
+  // ============================================================
 
+  function openAnnotationEditor(id) {
+    const folder = getFolder(id);
 
-                        const toAdd =
-                            newTags.filter(
-                                tag =>
-                                    !oldTags.includes(
-                                        tag
-                                    )
-                            );
+    if (!folder) return;
 
-
-                        for (
-                            const tag of
-                            toRemove
-                        ) {
-
-                            await api.removeMembershipTag(
-                                folder.name,
-                                tag
-                            );
-
-                        }
-
-
-                        for (
-                            const tag of
-                            toAdd
-                        ) {
-
-                            await api.addMembershipTag(
-                                folder.name,
-                                tag
-                            );
-
-                        }
-
-
-                        closeModal();
-
-                        await loadFolders();
-
-                        renderSidebar();
-
-                        applyFilters();
-
-
-                    } catch (error) {
-
-                        console.error(
-                            'Failed to update collection tags:',
-                            error
-                        );
-
-                        showAlert(
-                            `Failed to update tags: ${error.message}`
-                        );
-
-                    }
-
-                }
-            );
-
-    }
-
-
-    // ============================================================
-    // ANNOTATION EDITOR
-    // ============================================================
-
-    function openAnnotationEditor(
-        id
-    ) {
-
-        const folder =
-            getFolder(id);
-
-
-        if (!folder) return;
-
-
-        openModal(`
+    openModal(`
 
         <h2
             class="mb-4 text-sm font-semibold
@@ -4524,9 +2489,7 @@ async function loadCollectionIntoActive(
                    text-slate-300
                    outline-none
                    focus:border-cyan-500"
-        >${escapeHtml(
-            folder.annotation || ''
-        )}</textarea>
+        >${escapeHtml(folder.annotation || "")}</textarea>
 
 
         <div
@@ -4564,57 +2527,34 @@ async function loadCollectionIntoActive(
 
     `);
 
+    document
+      .getElementById("saveCollectionAnnotation")
+      ?.addEventListener("click", () => {
+        /*
+         * Annotation has no backend API, so do not pretend
+         * this value is persisted. Keep the existing local
+         * UI behaviour only.
+         */
+        folder.annotation = document
+          .getElementById("collectionAnnotationInput")
+          .value.trim();
 
-        document
-            .getElementById(
-                'saveCollectionAnnotation'
-            )
-            ?.addEventListener(
-                'click',
-                () => {
+        closeModal();
 
-                    /*
-                     * Annotation has no backend API, so do not pretend
-                     * this value is persisted. Keep the existing local
-                     * UI behaviour only.
-                     */
-                    folder.annotation =
-                        document
-                            .getElementById(
-                                'collectionAnnotationInput'
-                            )
-                            .value
-                            .trim();
+        render();
+      });
+  }
 
+  // ============================================================
+  // DELETE
+  // ============================================================
 
-                    closeModal();
+  function openDeleteModal(ids) {
+    const folders = ids.map(getFolder).filter(Boolean);
 
-                    render();
+    if (!folders.length) return;
 
-                }
-            );
-
-    }
-
-
-    // ============================================================
-    // DELETE
-    // ============================================================
-
-    function openDeleteModal(
-        ids
-    ) {
-
-        const folders =
-            ids
-                .map(getFolder)
-                .filter(Boolean);
-
-
-        if (!folders.length) return;
-
-
-        openModal(`
+    openModal(`
 
         <div
             class="flex items-start
@@ -4640,10 +2580,7 @@ async function loadCollectionIntoActive(
                            text-rose-300"
                 >
                     Delete
-                    ${folders.length > 1
-                ? 'Collections'
-                : 'Collection'
-            }
+                    ${folders.length > 1 ? "Collections" : "Collection"}
                 </h2>
 
                 <p
@@ -4667,8 +2604,8 @@ async function loadCollectionIntoActive(
         >
 
             ${folders
-                .map(
-                    folder => `
+              .map(
+                (folder) => `
 
                             <div
                                 class="border-b
@@ -4682,9 +2619,7 @@ async function loadCollectionIntoActive(
                                            text-xs
                                            text-slate-300"
                                 >
-                                    ${escapeHtml(
-                        folder.name
-                    )}
+                                    ${escapeHtml(folder.name)}
                                 </p>
 
                                 <p
@@ -4692,21 +2627,19 @@ async function loadCollectionIntoActive(
                                            text-[10px]
                                            text-slate-600"
                                 >
-                                    ${Array.isArray(
-                        folder.endpoints
-                    )
-                            ? folder.endpoints.length
-                            : 0
-                        }
+                                    ${
+                                      Array.isArray(folder.endpoints)
+                                        ? folder.endpoints.length
+                                        : 0
+                                    }
                                     endpoints
                                 </p>
 
                             </div>
 
-                        `
-                )
-                .join('')
-            }
+                        `,
+              )
+              .join("")}
 
         </div>
 
@@ -4746,47 +2679,27 @@ async function loadCollectionIntoActive(
 
     `);
 
+    document
+      .getElementById("confirmDelete")
+      ?.addEventListener("click", async (event) => {
+        const button = event.currentTarget;
 
-        document
-            .getElementById(
-                'confirmDelete'
-            )
-            ?.addEventListener(
-                'click',
-                async event => {
+        button.disabled = true;
 
-                    const button =
-                        event.currentTarget;
+        button.textContent = "Deleting…";
 
+        await deleteFolders(ids);
 
-                    button.disabled =
-                        true;
+        closeModal();
+      });
+  }
 
+  // ============================================================
+  // IMPORT / EXPORT
+  // ============================================================
 
-                    button.textContent =
-                        'Deleting…';
-
-
-                    await deleteFolders(
-                        ids
-                    );
-
-
-                    closeModal();
-
-                }
-            );
-
-    }
-
-
-    // ============================================================
-    // IMPORT / EXPORT
-    // ============================================================
-
-    function openImportModal() {
-
-        openModal(`
+  function openImportModal() {
+    openModal(`
 
         <h2
             class="mb-4 text-sm font-semibold
@@ -4836,31 +2749,16 @@ async function loadCollectionIntoActive(
         </div>
 
     `);
+  }
 
-    }
+  function openExportModal() {
+    const selected = getSelectedFolders();
 
+    const active = getFolder(state.activeFolderId);
 
-    function openExportModal() {
+    const targets = selected.length ? selected : active ? [active] : [];
 
-        const selected =
-            getSelectedFolders();
-
-
-        const active =
-            getFolder(
-                state.activeFolderId
-            );
-
-
-        const targets =
-            selected.length
-                ? selected
-                : active
-                    ? [active]
-                    : [];
-
-
-        openModal(`
+    openModal(`
 
         <h2
             class="mb-4 text-sm font-semibold
@@ -4885,11 +2783,11 @@ async function loadCollectionIntoActive(
                    bg-slate-950/60 p-3"
         >
 
-            ${targets.length
-
+            ${
+              targets.length
                 ? targets
                     .map(
-                        folder => `
+                      (folder) => `
 
                                 <div
                                     class="flex
@@ -4905,9 +2803,7 @@ async function loadCollectionIntoActive(
                                                text-xs
                                                text-slate-300"
                                     >
-                                        ${escapeHtml(
-                            folder.name
-                        )}
+                                        ${escapeHtml(folder.name)}
                                     </span>
 
                                     <span
@@ -4916,21 +2812,19 @@ async function loadCollectionIntoActive(
                                                text-[10px]
                                                text-slate-600"
                                     >
-                                        ${Array.isArray(
-                            folder.endpoints
-                        )
-                                ? folder.endpoints.length
-                                : 0
-                            }
+                                        ${
+                                          Array.isArray(folder.endpoints)
+                                            ? folder.endpoints.length
+                                            : 0
+                                        }
                                         endpoints
                                     </span>
 
                                 </div>
 
-                            `
+                            `,
                     )
-                    .join('')
-
+                    .join("")
                 : `
                         <span
                             class="text-xs
@@ -4963,270 +2857,120 @@ async function loadCollectionIntoActive(
         </div>
 
     `);
+  }
 
+  // ============================================================
+  // MODAL
+  // ============================================================
+
+  function wireModal() {
+    const backdrop = document.getElementById("modalBackdrop");
+
+    if (!backdrop) return;
+
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) {
+        closeModal();
+      }
+
+      if (event.target.closest("[data-modal-close]")) {
+        closeModal();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !backdrop.classList.contains("hidden")) {
+        closeModal();
+      }
+    });
+  }
+
+  function openModal(html) {
+    const backdrop = document.getElementById("modalBackdrop");
+
+    const content = document.getElementById("modalContent");
+
+    if (!backdrop || !content) {
+      return;
     }
 
+    content.innerHTML = html;
 
-    // ============================================================
-    // MODAL
-    // ============================================================
+    backdrop.classList.remove("hidden");
 
-    function wireModal() {
+    backdrop.classList.add("flex");
+  }
 
-        const backdrop =
-            document.getElementById(
-                'modalBackdrop'
-            );
+  function closeModal() {
+    const backdrop = document.getElementById("modalBackdrop");
 
+    const content = document.getElementById("modalContent");
 
-        if (!backdrop) return;
+    backdrop?.classList.add("hidden");
 
+    backdrop?.classList.remove("flex");
 
-        backdrop.addEventListener(
-            'click',
-            event => {
-
-                if (
-                    event.target ===
-                    backdrop
-                ) {
-
-                    closeModal();
-
-                }
-
-
-                if (
-                    event.target.closest(
-                        '[data-modal-close]'
-                    )
-                ) {
-
-                    closeModal();
-
-                }
-
-            }
-        );
-
-
-        document.addEventListener(
-            'keydown',
-            event => {
-
-                if (
-                    event.key ===
-                    'Escape' &&
-                    !backdrop.classList.contains(
-                        'hidden'
-                    )
-                ) {
-
-                    closeModal();
-
-                }
-
-            }
-        );
-
+    if (content) {
+      content.innerHTML = "";
     }
+  }
 
+  // ============================================================
+  // UTILITIES
+  // ============================================================
 
-    function openModal(
-        html
-    ) {
+  function calculateSize(folder) {
+    /*
+     * Size is not provided by the backend API.
+     * Do not fabricate a value.
+     */
+    return null;
+  }
 
-        const backdrop =
-            document.getElementById(
-                'modalBackdrop'
-            );
+  function capitalize(value) {
+    const text = String(value || "");
 
+    return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+  }
 
-        const content =
-            document.getElementById(
-                'modalContent'
-            );
+  function methodClass(method) {
+    return (
+      {
+        GET: "text-emerald-400",
 
+        POST: "text-sky-400",
 
-        if (
-            !backdrop ||
-            !content
-        ) {
+        PUT: "text-amber-400",
 
-            return;
+        PATCH: "text-violet-400",
 
-        }
+        DELETE: "text-rose-400",
+      }[String(method || "").toUpperCase()] || "text-white"
+    );
+  }
 
+  function escapeHtml(value) {
+    const div = document.createElement("div");
 
-        content.innerHTML =
-            html;
+    div.textContent = String(value ?? "");
 
+    return div.innerHTML;
+  }
 
-        backdrop.classList.remove(
-            'hidden'
-        );
+  function escapeAttr(value) {
+    return escapeHtml(value).replace(/"/g, "&quot;");
+  }
 
+  function showAlert(message) {
+    window.alert(message);
+  }
 
-        backdrop.classList.add(
-            'flex'
-        );
+  // ============================================================
+  // ICONS
+  // ============================================================
 
-    }
-
-
-    function closeModal() {
-
-        const backdrop =
-            document.getElementById(
-                'modalBackdrop'
-            );
-
-
-        const content =
-            document.getElementById(
-                'modalContent'
-            );
-
-
-        backdrop?.classList.add(
-            'hidden'
-        );
-
-
-        backdrop?.classList.remove(
-            'flex'
-        );
-
-
-        if (content) {
-
-            content.innerHTML =
-                '';
-
-        }
-
-    }
-
-
-    // ============================================================
-    // UTILITIES
-    // ============================================================
-
-    function calculateSize(
-        folder
-    ) {
-
-        /*
-         * Size is not provided by the backend API.
-         * Do not fabricate a value.
-         */
-        return null;
-
-    }
-
-
-    function capitalize(
-        value
-    ) {
-
-        const text =
-            String(
-                value || ''
-            );
-
-
-        return text
-            ? text.charAt(0).toUpperCase() +
-            text.slice(1)
-            : '';
-
-    }
-
-
-    function methodClass(
-        method
-    ) {
-
-        return {
-
-            GET:
-                'text-emerald-400',
-
-            POST:
-                'text-sky-400',
-
-            PUT:
-                'text-amber-400',
-
-            PATCH:
-                'text-violet-400',
-
-            DELETE:
-                'text-rose-400'
-
-        }[
-            String(
-                method || ''
-            ).toUpperCase()
-        ] || 'text-white';
-
-    }
-
-
-    function escapeHtml(
-        value
-    ) {
-
-        const div =
-            document.createElement(
-                'div'
-            );
-
-
-        div.textContent =
-            String(
-                value ?? ''
-            );
-
-
-        return div.innerHTML;
-
-    }
-
-
-    function escapeAttr(
-        value
-    ) {
-
-        return escapeHtml(
-            value
-        )
-            .replace(
-                /"/g,
-                '&quot;'
-            );
-
-    }
-
-
-    function showAlert(
-        message
-    ) {
-
-        window.alert(
-            message
-        );
-
-    }
-
-
-    // ============================================================
-    // ICONS
-    // ============================================================
-
-    function iconClose() {
-
-        return `
+  function iconClose() {
+    return `
 
         <svg
             class="h-4 w-4"
@@ -5240,13 +2984,10 @@ async function loadCollectionIntoActive(
         </svg>
 
     `;
+  }
 
-    }
-
-
-    function iconTrash() {
-
-        return `
+  function iconTrash() {
+    return `
 
         <svg
             class="h-4 w-4"
@@ -5262,25 +3003,20 @@ async function loadCollectionIntoActive(
         </svg>
 
     `;
+  }
 
-    }
+  // ============================================================
+  // PUBLIC API
+  // ============================================================
 
-
-    // ============================================================
-    // PUBLIC API
-    // ============================================================
-
-    window.CollectionView = {
-
-    getState:
-        () =>
-            state,
+  window.CollectionView = {
+    getState: () => state,
 
     getFolder,
 
-    setActiveFolder,
+    openTestView,
 
-    loadCollectionIntoActive,
+
 
     duplicateFolder,
 
@@ -5302,8 +3038,6 @@ async function loadCollectionIntoActive(
 
     resetFilters,
 
-    loadFolders
-
-};
-
+    loadFolders,
+  };
 })();

@@ -109,19 +109,6 @@
                         Test View
 
                     </button>
-                    <!-- Bookmark View -->
-                    <button id="listnav" data-target="./listview.html" data-page="list" class="nav-button
-                                   rounded-lg
-                                   px-3.5 py-1.5
-                                   text-sm
-                                   font-medium
-                                   text-slate-400
-                                   transition
-                                   hover:bg-slate-700
-                                   hover:text-white">
-
-                        Bookmark View
-                    </button>
                     <!-- Collection View -->
                     <button id="collectionnav" data-target="./collection_view.html" data-page="collection" class="nav-button
                                    rounded-lg
@@ -137,15 +124,14 @@
                     </button>
                     <!-- Import / Export -->
                     <button id="importexportnav" data-target="./import_export.html" data-page="import_export" class="nav-button
-                                     px-3.5
-                        py-1.5
-                        rounded-lg
-                        text-sm
-                        font-medium
-                        bg-cyan-500
-                        text-white
-                        shadow-lg
-                        shadow-cyan-500/30">
+                                   rounded-lg
+                                   px-3.5 py-1.5
+                                   text-sm
+                                   font-medium
+                                   text-slate-400
+                                   transition
+                                   hover:bg-slate-700
+                                   hover:text-white">
 
                         Import / Export
                     </button>
@@ -386,6 +372,16 @@
                            overflow-x-auto"
                 ></div>
 
+
+                <button
+                    id="tagsManager"
+                    type="button"
+                    class="shrink-0 text-xs
+                           text-cyan-400
+                           hover:text-cyan-300 border-2 border-cyan-500 rounded-md px-2 py-1"
+                >
+                    Tags operations
+                </button>
 
                 <button
                     id="clearFolderSelection"
@@ -895,6 +891,7 @@
     </div>
 
     <script src="../api/edms-api.js"></script>
+    <script src="../js/tags_manager.js"></script>
     <script src="../js/collectionview/collectionview.js"></script>
     <script src="../js/collectionview/rmbcv.js"></script>
     <script src="../js/nav-bar.js"></script>
