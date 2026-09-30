@@ -32,6 +32,7 @@ use handlers::{
     dataview::{dashboard, delete_folder, merge_folder, ws_make_folder_active},
     endpoints::{create_endpoint, delete_endpoint, lookup_endpoint, update_endpoint_annotation},
     logs::get_logs,
+    report_export::export_eqp_report,
     repo::{export_collection, import_collection},
     tags::{add_tag, list_tags_for_endpoint, popular_tags, remove_tag},
     test_view::{
@@ -318,6 +319,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/collections/by-tag/:tagname", get(collections_by_tag))
         .route("/repo/:collection/:filename/export", get(export_collection))
         .route("/repo/:collection/:filename/import", post(import_collection))
+        .route("/reports/:endpoint_id/export", post(export_eqp_report))
         .route("/internal/callback", post(ipc_callback))
         .route("/logs", get(get_logs))
         .layer(CorsLayer::permissive())
