@@ -111,8 +111,10 @@ pub async fn export_eqp_report(
 }
 
 fn assemble_from_edms_data(state: &AppState, endpoint_id: &str) -> Result<Option<Value>, String> {
-    let endpoint = db::get_endpoint(&state.core, &state.queries, endpoint_id)
-        .map_err(|database_error| format!("failed to read endpoint metadata: {database_error:?}"))?;
+    let endpoint =
+        db::get_endpoint(&state.core, &state.queries, endpoint_id).map_err(|database_error| {
+            format!("failed to read endpoint metadata: {database_error:?}")
+        })?;
     let Some(endpoint) = endpoint else {
         return Ok(None);
     };
@@ -152,9 +154,9 @@ fn assemble_eqp_payload(
             "timestamp": qp.timestamp,
             "status_code": qp.status_code,
             "response_time_ms": qp.response_time_ms,
-            "request": read_json(&endpoint_dir.join(format!("{}-request-{request_number}.json", endpoint.endpoint_id)))?,
-            "response": read_json(&endpoint_dir.join(format!("{}-response-{request_number}.json", endpoint.endpoint_id)))?,
-            "headers": read_json(&endpoint_dir.join(format!("{}-headers-{request_number}.json", endpoint.endpoint_id)))?,
+            "request": read_json_or_null(&endpoint_dir.join(format!("{}-request-{request_number}.json", endpoint.endpoint_id))),
+            "response": read_json_or_null(&endpoint_dir.join(format!("{}-response-{request_number}.json", endpoint.endpoint_id))),
+            "headers": read_json_or_null(&endpoint_dir.join(format!("{}-headers-{request_number}.json", endpoint.endpoint_id))),
             "source": prefix,
         }));
     }
@@ -169,11 +171,22 @@ fn assemble_eqp_payload(
     }))
 }
 
-fn read_json(path: &FsPath) -> Result<Value, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|file_error| format!("failed to read {}: {file_error}", path.display()))?;
-    serde_json::from_str(&content)
-        .map_err(|json_error| format!("invalid JSON in {}: {json_error}", path.display()))
+// QP metadata can be visible before the child finishes writing its files.
+// Keep available data and represent only the failed field as null.
+fn read_json_or_null(path: &FsPath) -> Value {
+    let result = std::fs::read_to_string(path)
+        .map_err(|file_error| format!("failed to read {}: {file_error}", path.display()))
+        .and_then(|content| {
+            serde_json::from_str(&content)
+                .map_err(|json_error| format!("invalid JSON in {}: {json_error}", path.display()))
+        });
+    match result {
+        Ok(value) => value,
+        Err(read_error) => {
+            eprintln!("[report-export] {read_error}; exporting this field as null");
+            Value::Null
+        }
+    }
 }
 
 fn parse_format(input: &str) -> Option<ExportFormat> {
@@ -225,10 +238,16 @@ mod tests {
         let root = std::env::temp_dir().join(format!("edms-report-export-{unique}"));
         let endpoint_dir = root.join("storage/globalEQPData/E0001-AAA");
         fs::create_dir_all(&endpoint_dir).expect("create sample EID directory");
-        fs::write(endpoint_dir.join("E0001-AAA-request-1.json"), r#"{"username":"emilys"}"#)
-            .expect("write request");
-        fs::write(endpoint_dir.join("E0001-AAA-response-1.json"), r#"{"id":1}"#)
-            .expect("write response");
+        fs::write(
+            endpoint_dir.join("E0001-AAA-request-1.json"),
+            r#"{"username":"emilys"}"#,
+        )
+        .expect("write request");
+        fs::write(
+            endpoint_dir.join("E0001-AAA-response-1.json"),
+            r#"{"id":1}"#,
+        )
+        .expect("write response");
         fs::write(
             endpoint_dir.join("E0001-AAA-headers-1.json"),
             r#"{"request_headers":{},"response_headers":{"content-type":"application/json"}}"#,
@@ -264,6 +283,75 @@ mod tests {
         );
 
         fs::remove_dir_all(root).expect("remove sample data");
+    }
+
+    #[test]
+    fn keeps_qps_when_report_files_are_missing_unreadable_or_invalid() {
+        for failed_field in ["request", "response", "headers"] {
+            for failure in ["missing", "unreadable", "invalid"] {
+                let unique = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("system clock")
+                    .as_nanos();
+                let root = std::env::temp_dir().join(format!(
+                    "edms-report-export-{failed_field}-{failure}-{unique}"
+                ));
+                let endpoint_dir = root.join("storage/globalEQPData/E0001-AAA");
+                fs::create_dir_all(&endpoint_dir).expect("create sample EID directory");
+                for request_number in [1, 2] {
+                    for field in ["request", "response", "headers"] {
+                        let path =
+                            endpoint_dir.join(format!("E0001-AAA-{field}-{request_number}.json"));
+                        if request_number == 2 && field == failed_field {
+                            match failure {
+                                "missing" => {}
+                                "unreadable" => {
+                                    fs::create_dir(&path).expect("create unreadable file path")
+                                }
+                                "invalid" => fs::write(&path, "{").expect("write invalid JSON"),
+                                _ => unreachable!(),
+                            }
+                        } else {
+                            fs::write(&path, r#"{"present":true}"#).expect("write healthy field");
+                        }
+                    }
+                }
+                let report = assemble_eqp_payload(
+                    &root,
+                    db::EndpointDto {
+                        endpoint_id: "E0001-AAA".to_string(),
+                        endpoint_str: "https://example.com/report".to_string(),
+                        annotation: Some("Partial report".to_string()),
+                        method: Some("POST".to_string()),
+                    },
+                    vec!["production".to_string()],
+                    [1, 2]
+                        .into_iter()
+                        .map(|request_number| db::QpSummary {
+                            request_number,
+                            method: Some("POST".to_string()),
+                            timestamp: None,
+                            status_code: Some(200),
+                            response_time_ms: Some(10),
+                        })
+                        .collect(),
+                )
+                .expect("one unavailable field must not fail the report");
+                assert_eq!(report["qp_data"].as_array().unwrap().len(), 2);
+                assert_eq!(report["tags"][0], "production");
+                assert_eq!(report["qp_data"][1]["request_number"], 2);
+                assert_eq!(report["qp_data"][1]["status_code"], 200);
+                for field in ["request", "response", "headers"] {
+                    assert_eq!(report["qp_data"][0][field]["present"], true);
+                    if field == failed_field {
+                        assert!(report["qp_data"][1][field].is_null(), "{field}/{failure}");
+                    } else {
+                        assert_eq!(report["qp_data"][1][field]["present"], true);
+                    }
+                }
+                fs::remove_dir_all(root).expect("remove sample data");
+            }
+        }
     }
 
     #[test]
