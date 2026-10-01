@@ -357,6 +357,28 @@ Content-Type: application/json
 ### Delete a repoview — removes the catalog row and the whole directory
 POST {{baseUrl}}/repoview/rtest-renamed/delete
 
+### --- Row-level tags on the RepoView instance itself (modifiable "Tags" ---
+### field from the spec) — separate from tags_in_data (aggregate, from the
+### copied endpoint data) and from the central rollup below.
+
+### Add a tag to a repoview
+POST {{baseUrl}}/repoview/rtest-renamed/membership-tags/add
+Content-Type: application/json
+
+{ "tag": "production" }
+
+### Remove a tag from a repoview
+POST {{baseUrl}}/repoview/rtest-renamed/membership-tags/remove
+Content-Type: application/json
+
+{ "tag": "production" }
+
+### List a repoview's own tags
+GET {{baseUrl}}/repoview/rtest-renamed/membership-tags
+
+### Find every repoview carrying a given tag
+GET {{baseUrl}}/repoview/by-tag/production
+
 ### --- Same four "tags" routes as webview above, scoped to repoview ---
 # (central tag-count rollup, separate from the membership routes above)
 

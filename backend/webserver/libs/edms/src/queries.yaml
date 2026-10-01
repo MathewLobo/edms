@@ -330,6 +330,18 @@ merge:
   CT_COLLECTIONS_BY_TAG:
     help: "List collections having a specific tag"
     query: "SELECT collection_name FROM collection_tag_memberships WHERE tagname = ? ORDER BY collection_name"
+  RT_INSERT:
+    help: "Insert repoview-level tag (row-level, modifiable — not the central tag-count rollup)"
+    query: "INSERT OR IGNORE INTO repoview_tag_memberships (repoview_name, tagname) VALUES (?, ?)"
+  RT_DELETE:
+    help: "Delete repoview-level tag"
+    query: "DELETE FROM repoview_tag_memberships WHERE repoview_name = ? AND tagname = ?"
+  RT_LIST:
+    help: "List tags for a repoview"
+    query: "SELECT tagname FROM repoview_tag_memberships WHERE repoview_name = ? ORDER BY tagname"
+  RT_REPOVIEWS_BY_TAG:
+    help: "List repoviews having a specific tag"
+    query: "SELECT repoview_name FROM repoview_tag_memberships WHERE tagname = ? ORDER BY repoview_name"
   CT_MERGE:
     help: "Merge collection tags from source to target"
     query: "INSERT OR IGNORE INTO collection_tag_memberships (collection_name, tagname) SELECT ?, tagname FROM collection_tag_memberships WHERE collection_name = ?"

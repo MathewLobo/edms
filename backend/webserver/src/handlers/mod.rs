@@ -15,3 +15,4 @@ pub mod view;
 pub mod view_catalog;
 pub mod view_tags;
 pub mod collection_tag_memberships;
+pub mod repoview_tag_memberships;

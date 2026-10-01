@@ -431,6 +431,21 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
         [],
     )?;
 
+    // 10b. Per-repoview tag memberships — the row-level "Tags (modifiable)"
+    // field from the RepoView spec (2026-09-05), identifiers on the
+    // RepoView instance itself. Separate from `tags_in_data` (the
+    // non-modifiable aggregate computed from copied endpoint data) and
+    // from `repoview_tags` (the central tag-count rollup).
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS repoview_tag_memberships (
+            repoview_name TEXT NOT NULL,
+            tagname TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (repoview_name, tagname)
+        )",
+        [],
+    )?;
+
     // 11. EID allocation tracking table for gap-list allocator
     conn.execute(
         "CREATE TABLE IF NOT EXISTS eid_allocation (
