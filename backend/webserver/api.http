@@ -326,6 +326,13 @@ Content-Type: application/json
 
 { "name": "rtest", "annotation": "optional", "source_collection": "product-catalog" }
 
+### Bulk delete — each name deleted independently, one bad name doesn't
+# block the rest. Always 200; check each entry's own "ok" in results.
+POST {{baseUrl}}/repoview/delete
+Content-Type: application/json
+
+{ "names": ["rtest", "rtest-2"] }
+
 ### List registered repoviews (catalog rows only, no aggregate stats)
 GET {{baseUrl}}/repoview/list
 

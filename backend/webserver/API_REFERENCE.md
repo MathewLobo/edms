@@ -207,6 +207,7 @@ Unlike Webview, a RepoView gets a real per-instance directory (`storage/repoview
 | Method | Path | Body | Notes |
 |---|---|---|---|
 | POST | `/repoview/create` | `{"name","annotation"?,"source_collection","endpoint_ids"?}` | Copies the chosen members of `source_collection` (or all of them, if `endpoint_ids` is omitted/empty) — real request/response/header files, not references. 400 if the name already exists, the source collection doesn't exist, or a requested id isn't a member of it |
+| POST | `/repoview/delete` | `{"names":[...]}` | Multi-select delete — each name deleted independently with its own result, so one bad name doesn't block the rest. Always `200`; check each entry's own `"ok"` in `results`. Top-level `"ok"` is `true` only if every name succeeded |
 | GET | `/repoview/list` | — | Catalog rows only (name/file_path/created_at/annotation) — no aggregate stats, see `GET /repoview/:name` for those |
 | GET | `/repoview/:name` | — | One RepoView's full catalog row plus every aggregate field: `eid_count`, `data_size_bytes`, `qp_count`, `tags_in_data`, `crud_types` (by HTTP method), and `source` (the collection it was created from). All computed live via joins/lookups against the membership file + central DB, not maintained as running counters. 404 if it doesn't exist |
 | GET | `/repoview/:name/endpoints` | — | List this RepoView's members with `added_at` |
@@ -225,7 +226,7 @@ Unlike Webview, a RepoView gets a real per-instance directory (`storage/repoview
 | GET | `/repoview/by-tag/:tagname` | — | Returns `{"repoviews":[...]}` |
 | POST | `/repoview/:name/tables/generate` | `{"batch_size"?}` | Generates the Index Table — Approach [B], Endpoint Segments (generic, no tags), per the Index Table wiki (2026-09-05). Sorts every member's URL path alphabetically, writes `Tables-NNN.md` batches of `batch_size` rows each (default 100), and a `Tables-meta.md` summarizing which file covers which segment range. **Replaces** every existing `Tables-*.md` in the folder on each call — not incremental. Deliberately separate from `create` (a "zero time op") and not triggered automatically on membership changes; the generated files can go stale until this is called again. Approach [A] (Sorted Tags) isn't built — flagged by Ravi as the more complex one (overlapping tag sets) |
 
-**Not built yet:** Approach [A] (Sorted Tags) index generation, bulk multi-select delete, and the two-way merge back into Collections.
+**Not built yet:** Approach [A] (Sorted Tags) index generation, and the two-way merge back into Collections.
 
 ---
 

@@ -967,6 +967,32 @@ pub async fn annotate_repoview_entry(
 
 /// POST /repoview/:name/delete — removes the catalog row and deletes the
 /// whole RepoView directory (membership file + copied data) from disk.
+/// Shared by the single-name route below and the bulk-delete route — one
+/// place that defines "delete this one RepoView's catalog row + folder."
+fn delete_repoview_sync(state: &AppState, name: &str) -> Result<(usize, bool), String> {
+    let catalog = open_catalog(state)?;
+    if catalog
+        .get(ViewKind::Repoview, name)
+        .map_err(|e| format!("{e:?}"))?
+        .is_none()
+    {
+        return Err(format!("RepoView '{name}' does not exist"));
+    }
+
+    let deleted_rows = catalog
+        .remove(ViewKind::Repoview, name)
+        .map_err(|e| format!("{e:?}"))?;
+
+    let dir = repoview_dir(state, name);
+    let mut dir_deleted = false;
+    if dir.is_dir() {
+        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+        dir_deleted = true;
+    }
+
+    Ok((deleted_rows, dir_deleted))
+}
+
 pub async fn delete_repoview_entry(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -974,29 +1000,7 @@ pub async fn delete_repoview_entry(
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
         let name = name.clone();
-        move || -> Result<(usize, bool), String> {
-            let catalog = open_catalog(&state)?;
-            if catalog
-                .get(ViewKind::Repoview, &name)
-                .map_err(|e| format!("{e:?}"))?
-                .is_none()
-            {
-                return Err(format!("RepoView '{name}' does not exist"));
-            }
-
-            let deleted_rows = catalog
-                .remove(ViewKind::Repoview, &name)
-                .map_err(|e| format!("{e:?}"))?;
-
-            let dir = repoview_dir(&state, &name);
-            let mut dir_deleted = false;
-            if dir.is_dir() {
-                std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
-                dir_deleted = true;
-            }
-
-            Ok((deleted_rows, dir_deleted))
-        }
+        move || delete_repoview_sync(&state, &name)
     })
     .await;
 
@@ -1009,6 +1013,51 @@ pub async fn delete_repoview_entry(
             )
         }
         Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NamesRequest {
+    pub names: Vec<String>,
+}
+
+/// POST /repoview/delete — multi-select delete, per the RepoView spec's
+/// "select multiple entries in the table and delete them" control. Each
+/// name is deleted independently with its own result, so one bad name in
+/// the batch doesn't block the rest — same philosophy as
+/// ViewTagCountOps::delete_many.
+pub async fn delete_repoviews_bulk(
+    State(state): State<AppState>,
+    Json(payload): Json<NamesRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let names = payload.names;
+    let res = tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || -> Vec<serde_json::Value> {
+            names
+                .into_iter()
+                .map(|name| match delete_repoview_sync(&state, &name) {
+                    Ok((deleted_rows, dir_deleted)) => json!({
+                        "name": name, "ok": true,
+                        "deleted_rows": deleted_rows, "dir_deleted": dir_deleted
+                    }),
+                    Err(e) => json!({ "name": name, "ok": false, "error": e }),
+                })
+                .collect()
+        }
+    })
+    .await;
+
+    match res {
+        Ok(results) => {
+            state.refresh_dashboard_snapshot();
+            let all_ok = results.iter().all(|r| r["ok"].as_bool().unwrap_or(false));
+            (StatusCode::OK, Json(json!({ "ok": all_ok, "results": results })))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "ok": false, "error": e.to_string() })),
