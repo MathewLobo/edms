@@ -863,3 +863,241 @@ pub async fn delete_qp(
 
     (StatusCode::OK, Json(json!({ "ok": true })))
 }
+
+// ── QP manual create / update (no real HTTP test) ───────────────────
+//
+// Per Shivanshu's spec (2026-09-29): the frontend needs to create and edit
+// QP pairs by hand, not just by running a real test. Both routes write the
+// saved JSON files directly and skip ipc::spawn_child/run_test entirely —
+// there's no real request to send and no real response to wait for.
+
+/// Parses a QP body string as JSON, falling back to a plain JSON string if
+/// it isn't valid JSON — matches how read_saved_file already renders a
+/// saved file back to the caller, so a round-trip through update/create
+/// reads back the same shape either way.
+fn parse_qp_body(raw: &str) -> Value {
+    serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.to_string()))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateQpRequest {
+    pub request_body: String,
+    pub response_body: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateQpRequest {
+    pub method: String,
+    pub request_body: String,
+    pub response_body: String,
+}
+
+/// POST /test-view/{endpoint_id}/qps/{request_number}/update
+///
+/// Overwrites an existing QP's request/response files in place. Leaves
+/// status_code/response_time_ms and the headers file untouched — the user
+/// only edited the bodies, not the outcome of a test that already ran.
+pub async fn update_qp(
+    State(state): State<AppState>,
+    Path((endpoint_id, request_number)): Path<(String, i32)>,
+    Json(payload): Json<UpdateQpRequest>,
+) -> (StatusCode, Json<Value>) {
+    if let Err(e) = safe_id(&endpoint_id) {
+        return e;
+    }
+
+    let exists = tokio::task::spawn_blocking({
+        let st = state.clone();
+        let eid = endpoint_id.clone();
+        move || db::qp_exists(&st.core, &st.queries, &eid, request_number)
+    })
+    .await;
+
+    match exists {
+        Ok(Ok(true)) => {}
+        Ok(Ok(false)) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "ok": false, "error": format!("no QP pair {endpoint_id}#{request_number}") })),
+            )
+        }
+        Ok(Err(e)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("{e:?}") })),
+            )
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+        }
+    }
+
+    let dir = state.endpoint_storage_dir(&endpoint_id);
+    let request_path = dir.join(format!("{endpoint_id}-request-{request_number}.json"));
+    let response_path = dir.join(format!("{endpoint_id}-response-{request_number}.json"));
+
+    if let Err(e) = tokio::fs::write(&request_path, parse_qp_body(&payload.request_body).to_string()).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": format!("failed to write request file: {e}") })),
+        );
+    }
+    if let Err(e) = tokio::fs::write(&response_path, parse_qp_body(&payload.response_body).to_string()).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": format!("failed to write response file: {e}") })),
+        );
+    }
+
+    state
+        .emit(ServerEvent::QpUpdated {
+            endpoint_id,
+            request_number,
+        })
+        .await;
+
+    (StatusCode::OK, Json(json!({ "ok": true })))
+}
+
+/// POST /test-view/{endpoint_id}/qps/create
+///
+/// Creates a brand-new QP without running a real HTTP test — the request
+/// and response bodies come straight from the caller. status_code and
+/// response_time_ms are left NULL (no real response happened), and a real
+/// but empty headers file is written so GET .../headers/{n} doesn't 404
+/// for a manually created pair.
+pub async fn create_qp(
+    State(state): State<AppState>,
+    Path(endpoint_id): Path<String>,
+    Json(payload): Json<CreateQpRequest>,
+) -> (StatusCode, Json<Value>) {
+    if let Err(e) = safe_id(&endpoint_id) {
+        return e;
+    }
+
+    let endpoint = tokio::task::spawn_blocking({
+        let st = state.clone();
+        let eid = endpoint_id.clone();
+        move || db::get_endpoint(&st.core, &st.queries, &eid)
+    })
+    .await;
+
+    match endpoint {
+        Ok(Ok(Some(_))) => {}
+        Ok(Ok(None)) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "ok": false, "error": format!("no endpoint {endpoint_id}") })),
+            )
+        }
+        Ok(Err(e)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("{e:?}") })),
+            )
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+        }
+    }
+
+    let method = payload.method.to_uppercase();
+
+    let request_number = tokio::task::spawn_blocking({
+        let st = state.clone();
+        let eid = endpoint_id.clone();
+        move || db::get_next_request_number(&st.core, &st.queries, &eid)
+    })
+    .await;
+    let request_number = match request_number {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("{e:?}") })),
+            )
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+        }
+    };
+
+    let dir = state.endpoint_storage_dir(&endpoint_id);
+    let request_path = dir.join(format!("{endpoint_id}-request-{request_number}.json"));
+    let response_path = dir.join(format!("{endpoint_id}-response-{request_number}.json"));
+    let headers_path = dir.join(format!("{endpoint_id}-headers-{request_number}.json"));
+
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": format!("failed to create storage dir: {e}") })),
+        );
+    }
+    if let Err(e) = tokio::fs::write(&request_path, parse_qp_body(&payload.request_body).to_string()).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": format!("failed to write request file: {e}") })),
+        );
+    }
+    if let Err(e) = tokio::fs::write(&response_path, parse_qp_body(&payload.response_body).to_string()).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": format!("failed to write response file: {e}") })),
+        );
+    }
+    let headers_json = json!({ "request_headers": {}, "response_headers": {} });
+    if let Err(e) = tokio::fs::write(&headers_path, headers_json.to_string()).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": format!("failed to write headers file: {e}") })),
+        );
+    }
+
+    let insert_result = tokio::task::spawn_blocking({
+        let st = state.clone();
+        let eid = endpoint_id.clone();
+        let rf = request_path.display().to_string();
+        let resf = response_path.display().to_string();
+        let m = method.clone();
+        move || -> edms::error::EdmsResult<()> {
+            db::insert_request_metadata(&st.core, &st.queries, &eid, request_number, &rf, &m)?;
+            db::insert_response_metadata(&st.core, &st.queries, &eid, request_number, &resf, None, None)?;
+            Ok(())
+        }
+    })
+    .await;
+
+    match insert_result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("{e:?}") })),
+            )
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+        }
+    }
+
+    state
+        .emit(ServerEvent::QpCreated {
+            endpoint_id,
+            request_number,
+        })
+        .await;
+
+    (StatusCode::OK, Json(json!({ "ok": true, "request_number": request_number })))
+}

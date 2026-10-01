@@ -57,6 +57,15 @@ pub enum ServerEvent {
 
     QpDeleted { endpoint_id: String, request_number: i32 },
 
+    /// A QP's request/response body was overwritten in place via
+    /// POST /test-view/:endpoint_id/qps/:request_number/update — not a real
+    /// test run, so no TestFinished/HistoryUpdated accompanies this.
+    QpUpdated { endpoint_id: String, request_number: i32 },
+
+    /// A brand-new QP was created via POST /test-view/:endpoint_id/qps/create
+    /// without running a real HTTP test (per Shivanshu, 2026-09-29).
+    QpCreated { endpoint_id: String, request_number: i32 },
+
     EndpointAnnotationUpdated { endpoint_id: String },
 
     ViewRefresh { view_type: String, count: usize },
