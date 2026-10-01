@@ -214,6 +214,7 @@ Unlike Webview, a RepoView gets a real per-instance directory (`storage/repoview
 | POST | `/repoview/:name/rename` | `{"new_name"}` | Renames the catalog entry and moves the **whole RepoView directory** (not just one file, unlike Collections) to match |
 | POST | `/repoview/:name/annotation` | `{"annotation"}` | |
 | POST | `/repoview/:name/delete` | — | Removes the catalog row and deletes the whole RepoView directory (membership file + all copied data) from disk |
+| POST | `/repoview/:name/duplicate` | `{"new_name"}` | Clones the whole directory as-is (membership file, copied EQP data, any generated `Tables-*.md`) under a new name, plus the row's own annotation, source, and row-level membership-tags. No regeneration of the index tables — the underlying data doesn't change on duplicate, so they're still correct as copied. 400 if `new_name` already exists or the source RepoView doesn't exist |
 | POST | `/repoview/tags/create` | `{"name","endpoint_ids"?}` | Central tag-count rollup, same as Collections/Webview — separate from the per-RepoView membership above |
 | POST | `/repoview/tags/delete` | `{"names"}` | |
 | POST | `/repoview/tags/rename` | `{"old_name","new_name"}` | |
@@ -224,7 +225,7 @@ Unlike Webview, a RepoView gets a real per-instance directory (`storage/repoview
 | GET | `/repoview/by-tag/:tagname` | — | Returns `{"repoviews":[...]}` |
 | POST | `/repoview/:name/tables/generate` | `{"batch_size"?}` | Generates the Index Table — Approach [B], Endpoint Segments (generic, no tags), per the Index Table wiki (2026-09-05). Sorts every member's URL path alphabetically, writes `Tables-NNN.md` batches of `batch_size` rows each (default 100), and a `Tables-meta.md` summarizing which file covers which segment range. **Replaces** every existing `Tables-*.md` in the folder on each call — not incremental. Deliberately separate from `create` (a "zero time op") and not triggered automatically on membership changes; the generated files can go stale until this is called again. Approach [A] (Sorted Tags) isn't built — flagged by Ravi as the more complex one (overlapping tag sets) |
 
-**Not built yet:** Approach [A] (Sorted Tags) index generation, bulk multi-select delete, duplicate, and the two-way merge back into Collections.
+**Not built yet:** Approach [A] (Sorted Tags) index generation, bulk multi-select delete, and the two-way merge back into Collections.
 
 ---
 

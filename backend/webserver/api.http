@@ -354,6 +354,15 @@ Content-Type: application/json
 
 { "annotation": "updated" }
 
+### Duplicate a repoview — clones the whole directory, annotation, source,
+# and row-level tags under a new name. No regeneration of Tables-*.md;
+# the underlying data doesn't change on duplicate, so the copy is correct
+# as-is.
+POST {{baseUrl}}/repoview/rtest-renamed/duplicate
+Content-Type: application/json
+
+{ "new_name": "rtest-renamed-copy" }
+
 ### Delete a repoview — removes the catalog row and the whole directory
 POST {{baseUrl}}/repoview/rtest-renamed/delete
 

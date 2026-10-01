@@ -1016,6 +1016,112 @@ pub async fn delete_repoview_entry(
     }
 }
 
+/// POST /repoview/:name/duplicate — clones the whole RepoView folder
+/// (membership file, copied EQP data, and any generated Tables-*.md) as-is
+/// under a new name, per the proposal sent to Ravi: the underlying data
+/// doesn't change on duplicate, so the batched tables are still correct
+/// the instant they're copied — no need to regenerate them. Checked: the
+/// generated Tables-meta.md doesn't embed the RepoView's own name/
+/// created_at/source anywhere, so there's nothing to patch post-copy
+/// either — a straight directory copy is the whole operation.
+///
+/// Also copies this RepoView's own row-level membership-tags (the
+/// modifiable "Tags" field) — those are part of the row's identity, not
+/// the data, so they come along with the clone same as annotation does.
+pub async fn duplicate_repoview_entry(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(payload): Json<RenameViewRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let new_name = payload.new_name;
+    let res = tokio::task::spawn_blocking({
+        let state = state.clone();
+        let old_name = name.clone();
+        let new_name = new_name.clone();
+        move || -> Result<serde_json::Value, String> {
+            let query = state
+                .queries
+                .get_catalog_query("REPOVIEW_GET")
+                .ok_or(edms::error::EdmsError::UnknownError)
+                .map_err(|e| format!("{e:?}"))?;
+            let catalog = open_catalog(&state)?;
+            let row: Option<(String, Option<String>, String, Option<String>, Option<String>)> =
+                catalog
+                    .core
+                    .cproc(query, &[&old_name], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                    })
+                    .map_err(|e| format!("{e:?}"))?
+                    .into_iter()
+                    .next();
+
+            let Some((_, _, _, annotation, source)) = row else {
+                return Err(format!("RepoView '{old_name}' does not exist"));
+            };
+
+            if catalog
+                .get(ViewKind::Repoview, &new_name)
+                .map_err(|e| format!("{e:?}"))?
+                .is_some()
+            {
+                return Err(format!("RepoView '{new_name}' already exists"));
+            }
+
+            let old_dir = repoview_dir(&state, &old_name);
+            let new_dir = repoview_dir(&state, &new_name);
+            if !old_dir.is_dir() {
+                return Err(format!("RepoView '{old_name}' has no folder yet"));
+            }
+            copy_dir_recursive(&old_dir, &new_dir).map_err(|e| e.to_string())?;
+
+            let new_file_path = repoview_file_path(&state, &new_name);
+            let create_query = state
+                .queries
+                .get_catalog_query("REPOVIEW_CREATE")
+                .ok_or(edms::error::EdmsError::UnknownError)
+                .map_err(|e| format!("{e:?}"))?;
+            if let Err(e) = catalog
+                .core
+                .proc(create_query, &[&new_name, &new_file_path, &annotation, &source])
+            {
+                // Roll back the directory copy so a failed catalog insert
+                // doesn't leave an orphaned duplicate folder behind.
+                let _ = std::fs::remove_dir_all(&new_dir);
+                return Err(format!("{e:?}"));
+            }
+
+            // Copy row-level membership-tags across too — same table used
+            // by add_repoview_tag/list_repoview_tags_for_name.
+            let _ = catalog.core.proc(
+                "INSERT OR IGNORE INTO repoview_tag_memberships (repoview_name, tagname) \
+                 SELECT ?, tagname FROM repoview_tag_memberships WHERE repoview_name = ?",
+                &[&new_name, &old_name],
+            );
+
+            Ok(json!({
+                "ok": true,
+                "name": new_name,
+                "file_path": new_file_path,
+                "annotation": annotation,
+                "source": source
+            }))
+        }
+    })
+    .await;
+
+    match res {
+        Ok(Ok(body)) => {
+            state.refresh_dashboard_snapshot();
+            (StatusCode::OK, Json(body))
+        }
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        ),
+    }
+}
+
 // ── Tag → Collection transfer ("Add to Collection") ─────────────────────
 //
 // The central `tags` table (TagOps) stays the single source of truth for

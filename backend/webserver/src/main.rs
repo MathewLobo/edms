@@ -45,7 +45,7 @@ use handlers::{
     view_catalog::{
         annotate_collection_entry, annotate_repoview_entry, create_collection_entry,
         create_repoview_entry, create_webview_entry, delete_collection_entry,
-        delete_repoview_entry, get_collection_entry, get_repoview_entry,
+        delete_repoview_entry, duplicate_repoview_entry, get_collection_entry, get_repoview_entry,
         import_tags_into_collection, list_collection_endpoint_tags, list_collection_endpoints,
         list_collections, list_repoview_endpoints, list_repoviews, list_webviews,
         remove_endpoint_from_collection, remove_endpoint_from_repoview, rename_collection_entry,
@@ -315,6 +315,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/repoview/:name/rename", post(rename_repoview_entry))
         .route("/repoview/:name/annotation", post(annotate_repoview_entry))
         .route("/repoview/:name/delete", post(delete_repoview_entry))
+        .route("/repoview/:name/duplicate", post(duplicate_repoview_entry))
         .route("/repoview/:name/endpoints/remove", post(remove_endpoint_from_repoview))
         .route("/repoview/:name/endpoints", get(list_repoview_endpoints))
         .route("/repoview/:name/membership-tags/add", post(add_repoview_tag))
