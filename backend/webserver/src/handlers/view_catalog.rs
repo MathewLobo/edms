@@ -646,6 +646,22 @@ pub async fn create_repoview_entry(
                 }
             }
 
+            // Copy each member's current central tags into the RepoView's
+            // own endpoint_tags table too — unlike Collections (reference-
+            // only, so tag-copying there is opt-in via export_existing_tags
+            // on /tags/import), a RepoView's whole point is being a
+            // complete, recoverable snapshot, so this isn't optional.
+            let tag_ops = TagOps::new(&state.db_path.display().to_string());
+            tag_ops.initialize().map_err(|e| format!("{e:?}"))?;
+            let mut tags_copied = 0usize;
+            for eid in &endpoint_ids {
+                for tag in tag_ops.get_by_endpoint(eid).map_err(|e| format!("{e:?}"))? {
+                    if membership.add_tag(eid, &tag).map_err(|e| format!("{e:?}"))? > 0 {
+                        tags_copied += 1;
+                    }
+                }
+            }
+
             let query = state
                 .queries
                 .get_catalog_query("REPOVIEW_CREATE")
@@ -668,6 +684,7 @@ pub async fn create_repoview_entry(
                 "source": source_collection,
                 "endpoints_added": added,
                 "endpoints_with_data_copied": copied,
+                "tags_copied": tags_copied,
                 "endpoints_requested": endpoint_ids.len()
             }))
         }
@@ -815,6 +832,42 @@ pub async fn list_repoview_endpoints(
                 "ok": true,
                 "endpoints": entries.into_iter().map(|(endpoint_id, added_at)| json!({
                     "endpoint_id": endpoint_id, "added_at": added_at
+                })).collect::<Vec<_>>()
+            })),
+        ),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        ),
+    }
+}
+
+/// GET /repoview/:name/tags/endpoints — list every (endpoint_id, tag) pair
+/// this RepoView carries in its own copy (from create's automatic tag
+/// copy, above) — separate from the central tags table and from this
+/// RepoView's own row-level membership-tags.
+pub async fn list_repoview_endpoint_tags(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let res = tokio::task::spawn_blocking({
+        let state = state.clone();
+        let name = name.clone();
+        move || -> Result<Vec<(String, String)>, String> {
+            let membership = open_existing_membership(&state, ViewKind::Repoview, &name)?;
+            membership.list_all_endpoint_tags().map_err(|e| format!("{e:?}"))
+        }
+    })
+    .await;
+
+    match res {
+        Ok(Ok(pairs)) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "tags": pairs.into_iter().map(|(endpoint_id, tag)| json!({
+                    "endpoint_id": endpoint_id, "tag": tag
                 })).collect::<Vec<_>>()
             })),
         ),

@@ -343,6 +343,11 @@ GET {{baseUrl}}/repoview/rtest
 ### List a repoview's member endpoints
 GET {{baseUrl}}/repoview/rtest/endpoints
 
+### List the per-endpoint tags this repoview carries in its own copy —
+# auto-copied at create time, separate from tags_in_data (read live from
+# the central table) and from membership-tags (tags on the row itself).
+GET {{baseUrl}}/repoview/rtest/tags/endpoints
+
 ### Remove one member — also deletes its copied data from this repoview
 POST {{baseUrl}}/repoview/rtest/endpoints/remove
 Content-Type: application/json

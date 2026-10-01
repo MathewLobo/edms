@@ -48,7 +48,8 @@ use handlers::{
         delete_repoview_entry, delete_repoviews_bulk, duplicate_repoview_entry,
         get_collection_entry, get_repoview_entry,
         import_tags_into_collection, list_collection_endpoint_tags, list_collection_endpoints,
-        list_collections, list_repoview_endpoints, list_repoviews, list_webviews,
+        list_collections, list_repoview_endpoint_tags, list_repoview_endpoints, list_repoviews,
+        list_webviews,
         remove_endpoint_from_collection, remove_endpoint_from_repoview, rename_collection_entry,
         rename_repoview_entry,
     },
@@ -320,6 +321,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/repoview/:name/duplicate", post(duplicate_repoview_entry))
         .route("/repoview/:name/endpoints/remove", post(remove_endpoint_from_repoview))
         .route("/repoview/:name/endpoints", get(list_repoview_endpoints))
+        .route("/repoview/:name/tags/endpoints", get(list_repoview_endpoint_tags))
         .route("/repoview/:name/membership-tags/add", post(add_repoview_tag))
         .route("/repoview/:name/membership-tags/remove", post(remove_repoview_tag))
         .route("/repoview/:name/membership-tags", get(list_repoview_tags_for_name))
