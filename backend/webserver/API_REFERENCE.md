@@ -185,7 +185,7 @@ A different table from Collections' tag rollups above — tracks tags directly o
 
 ---
 
-## Webview / Repoview
+## Webview
 
 Same catalog pattern as Collections (register a name, list, per-view tag rollups) but **not** as far along — no independent SQLite file per instance yet (`file_path` stays `null`), and no endpoint-membership routes (no `webview/:name/endpoints/add` equivalent exists).
 
@@ -197,12 +197,29 @@ Same catalog pattern as Collections (register a name, list, per-view tag rollups
 | POST | `/webview/tags/delete` | `{"names"}` |
 | POST | `/webview/tags/rename` | `{"old_name","new_name"}` |
 | GET | `/webview/tags/list` | — |
-| POST | `/repoview/create` | `{"name"}` |
-| GET | `/repoview/list` | — |
-| POST | `/repoview/tags/create` | `{"name","endpoint_ids"?}` |
-| POST | `/repoview/tags/delete` | `{"names"}` |
-| POST | `/repoview/tags/rename` | `{"old_name","new_name"}` |
-| GET | `/repoview/tags/list` | — |
+
+---
+
+## Repoview
+
+Unlike Webview, a RepoView gets a real per-instance directory (`storage/repoviews/:name/`) holding its own membership SQLite file **and real copies** of each member's request/response/header files — not just references into the central tables (per Ravi, "EIDs converted to SQLite DBs with EID data put into EQP data folder, i.e. fully recoverable"). A RepoView is created **from** a Collection; that's currently the only way data enters one.
+
+| Method | Path | Body | Notes |
+|---|---|---|---|
+| POST | `/repoview/create` | `{"name","annotation"?,"source_collection","endpoint_ids"?}` | Copies the chosen members of `source_collection` (or all of them, if `endpoint_ids` is omitted/empty) — real request/response/header files, not references. 400 if the name already exists, the source collection doesn't exist, or a requested id isn't a member of it |
+| GET | `/repoview/list` | — | Catalog rows only (name/file_path/created_at/annotation) — no aggregate stats, see `GET /repoview/:name` for those |
+| GET | `/repoview/:name` | — | One RepoView's full catalog row plus every aggregate field: `eid_count`, `data_size_bytes`, `qp_count`, `tags_in_data`, `crud_types` (by HTTP method), and `source` (the collection it was created from). All computed live via joins/lookups against the membership file + central DB, not maintained as running counters. 404 if it doesn't exist |
+| GET | `/repoview/:name/endpoints` | — | List this RepoView's members with `added_at` |
+| POST | `/repoview/:name/endpoints/remove` | `{"endpoint_id"}` | Removes membership **and** deletes that endpoint's copied data from this RepoView's folder, so the aggregate stats above stay accurate |
+| POST | `/repoview/:name/rename` | `{"new_name"}` | Renames the catalog entry and moves the **whole RepoView directory** (not just one file, unlike Collections) to match |
+| POST | `/repoview/:name/annotation` | `{"annotation"}` | |
+| POST | `/repoview/:name/delete` | — | Removes the catalog row and deletes the whole RepoView directory (membership file + all copied data) from disk |
+| POST | `/repoview/tags/create` | `{"name","endpoint_ids"?}` | Central tag-count rollup, same as Collections/Webview — separate from the per-RepoView membership above |
+| POST | `/repoview/tags/delete` | `{"names"}` | |
+| POST | `/repoview/tags/rename` | `{"old_name","new_name"}` | |
+| GET | `/repoview/tags/list` | — | |
+
+**Not built yet:** the Tables-meta.md/Tables-NNN.md index-table generation (the actual markdown data output), bulk multi-select delete, duplicate, and the two-way merge back into Collections.
 
 ---
 
@@ -254,4 +271,6 @@ Same catalog pattern as Collections (register a name, list, per-view tag rollups
 - Deleting an endpoint now cascades its bookmarks correctly (2026-09-22), but **not** collection memberships or history/request/response data — those can still be left behind, orphaned, referencing a dead endpoint.
 - A QP (request/response pair — see Test View above) is generated automatically by every test run, not created/edited by hand. There's no route to edit a QP's saved request/response in place, only to list and delete.
 - Import (`/repo/:collection/:filename/import`) only extracts a zip to disk — it does not create/update endpoint, bookmark, or collection-membership DB rows from the imported files.
-- Webview/Repoview have no independent per-instance SQLite file yet (unlike Collections) and no endpoint-membership routes at all.
+- Webview still has no independent per-instance SQLite file (unlike Collections and now Repoview) and no endpoint-membership routes at all.
+- A RepoView's membership and copied data don't update when its source Collection changes after creation — it's a one-time copy, not a live or two-way sync (that merge isn't built yet).
+- RepoView's aggregate stats (`GET /repoview/:name`) are computed live by looping over every member endpoint, not via a single batched join — fine at the sizes tested, but worth revisiting if a RepoView grows very large.

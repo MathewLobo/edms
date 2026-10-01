@@ -315,15 +315,50 @@ Content-Type: application/json
 ### List webview tags with their counts
 GET {{baseUrl}}/webview/tags/list
 
-### --- Same four "tags" routes + catalog create/list, scoped to repoview ---
+### --- Repoview: a real per-instance directory, copied FROM a collection ---
+# Unlike webview/collections tags below, repoview also has its own
+# membership + real copied data — see API_REFERENCE.md's Repoview section.
 
+### Create a repoview from a collection — copies real request/response/
+# header files for the given endpoint_ids (or every member, if omitted).
 POST {{baseUrl}}/repoview/create
 Content-Type: application/json
 
-{ "name": "rtest" }
+{ "name": "rtest", "annotation": "optional", "source_collection": "product-catalog" }
 
-### List registered repoviews
+### List registered repoviews (catalog rows only, no aggregate stats)
 GET {{baseUrl}}/repoview/list
+
+### One repoview's full stats: eid_count, data_size_bytes, qp_count,
+# tags_in_data, crud_types, source
+GET {{baseUrl}}/repoview/rtest
+
+### List a repoview's member endpoints
+GET {{baseUrl}}/repoview/rtest/endpoints
+
+### Remove one member — also deletes its copied data from this repoview
+POST {{baseUrl}}/repoview/rtest/endpoints/remove
+Content-Type: application/json
+
+{ "endpoint_id": "E0001-AAA" }
+
+### Rename a repoview — moves the whole directory, not just one file
+POST {{baseUrl}}/repoview/rtest/rename
+Content-Type: application/json
+
+{ "new_name": "rtest-renamed" }
+
+### Annotate a repoview
+POST {{baseUrl}}/repoview/rtest-renamed/annotation
+Content-Type: application/json
+
+{ "annotation": "updated" }
+
+### Delete a repoview — removes the catalog row and the whole directory
+POST {{baseUrl}}/repoview/rtest-renamed/delete
+
+### --- Same four "tags" routes as webview above, scoped to repoview ---
+# (central tag-count rollup, separate from the membership routes above)
 
 ### Create a repoview tag, or add to its count if it already exists
 POST {{baseUrl}}/repoview/tags/create

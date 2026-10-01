@@ -394,6 +394,19 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
         }
     }
 
+    // RepoView-only: `source` records which Collection a RepoView's data
+    // was copied from (the "Bookmark Tag" field per the RepoView spec,
+    // 2026-09-05) — non-modifiable after creation. Collections/webview
+    // don't have a Source concept, so this only touches `repoview`.
+    let has_repoview_source: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('repoview') WHERE name = 'source'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_repoview_source == 0 {
+        conn.execute("ALTER TABLE repoview ADD COLUMN source TEXT", [])?;
+    }
+
     // 9. Central tag-count rollups
     for table in ["collections_tags", "webview_tags", "repoview_tags"] {
         conn.execute(

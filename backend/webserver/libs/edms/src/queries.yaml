@@ -247,14 +247,14 @@ catalog:
     help: "Set a webview's annotation"
     query: "UPDATE webview SET annotation = ? WHERE name = ?"
   REPOVIEW_CREATE:
-    help: "Register a new repoview in the catalog"
-    query: "INSERT INTO repoview (name, file_path, annotation) VALUES (?, ?, ?)"
+    help: "Register a new repoview in the catalog, with the source collection it was copied from"
+    query: "INSERT INTO repoview (name, file_path, annotation, source) VALUES (?, ?, ?, ?)"
   REPOVIEW_LIST:
     help: "List all registered repoviews"
     query: "SELECT name, file_path, created_at, annotation FROM repoview ORDER BY name"
   REPOVIEW_GET:
-    help: "Get one repoview's catalog row by name (to find its file_path)"
-    query: "SELECT name, file_path, created_at, annotation FROM repoview WHERE name = ?"
+    help: "Get one repoview's catalog row by name, including its source collection — extra column vs. the generic get()/list() row mapping, which only reads the first four and ignores the rest"
+    query: "SELECT name, file_path, created_at, annotation, source FROM repoview WHERE name = ?"
   REPOVIEW_REMOVE:
     help: "Remove a repoview's catalog entry"
     query: "DELETE FROM repoview WHERE name = ?"
