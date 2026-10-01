@@ -379,6 +379,20 @@ GET {{baseUrl}}/repoview/rtest-renamed/membership-tags
 ### Find every repoview carrying a given tag
 GET {{baseUrl}}/repoview/by-tag/production
 
+### --- Index Table generation — Approach [B], Endpoint Segments ---
+# Replaces every existing Tables-*.md in the folder on each call. Not run
+# automatically on create or on membership changes — call this whenever
+# you want the generated files refreshed.
+
+### Generate with the default batch size (100)
+POST {{baseUrl}}/repoview/rtest-renamed/tables/generate
+
+### Generate with an explicit batch size
+POST {{baseUrl}}/repoview/rtest-renamed/tables/generate
+Content-Type: application/json
+
+{ "batch_size": 50 }
+
 ### --- Same four "tags" routes as webview above, scoped to repoview ---
 # (central tag-count rollup, separate from the membership routes above)
 

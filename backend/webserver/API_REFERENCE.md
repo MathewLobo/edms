@@ -222,8 +222,9 @@ Unlike Webview, a RepoView gets a real per-instance directory (`storage/repoview
 | POST | `/repoview/:name/membership-tags/remove` | `{"tag"}` | |
 | GET | `/repoview/:name/membership-tags` | — | |
 | GET | `/repoview/by-tag/:tagname` | — | Returns `{"repoviews":[...]}` |
+| POST | `/repoview/:name/tables/generate` | `{"batch_size"?}` | Generates the Index Table — Approach [B], Endpoint Segments (generic, no tags), per the Index Table wiki (2026-09-05). Sorts every member's URL path alphabetically, writes `Tables-NNN.md` batches of `batch_size` rows each (default 100), and a `Tables-meta.md` summarizing which file covers which segment range. **Replaces** every existing `Tables-*.md` in the folder on each call — not incremental. Deliberately separate from `create` (a "zero time op") and not triggered automatically on membership changes; the generated files can go stale until this is called again. Approach [A] (Sorted Tags) isn't built — flagged by Ravi as the more complex one (overlapping tag sets) |
 
-**Not built yet:** the Tables-meta.md/Tables-NNN.md index-table generation (the actual markdown data output), bulk multi-select delete, duplicate, and the two-way merge back into Collections.
+**Not built yet:** Approach [A] (Sorted Tags) index generation, bulk multi-select delete, duplicate, and the two-way merge back into Collections.
 
 ---
 
@@ -279,3 +280,4 @@ Unlike Webview, a RepoView gets a real per-instance directory (`storage/repoview
 - A RepoView's membership and copied data don't update when its source Collection changes after creation — it's a one-time copy, not a live or two-way sync (that merge isn't built yet).
 - RepoView's aggregate stats (`GET /repoview/:name`) are computed live by looping over every member endpoint, not via a single batched join — fine at the sizes tested, but worth revisiting if a RepoView grows very large.
 - Renaming or deleting a RepoView doesn't cascade its row-level membership-tags (`repoview_tag_memberships`) — same pre-existing gap Collections has with `collection_tag_memberships`, not something new introduced here.
+- Index Table generation (`/repoview/:name/tables/generate`) is a point-in-time snapshot — it doesn't stay in sync with membership changes made afterward. Call it again to refresh.
