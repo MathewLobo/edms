@@ -32,7 +32,7 @@ use std::path::Path as FsPath;
 
 use crate::{
     db,
-    handlers::view_catalog::{open_existing_membership, repoview_dir},
+    handlers::view_catalog::{open_catalog, open_existing_membership, repoview_dir, validate_repoview_name},
     state::AppState,
 };
 
@@ -361,10 +361,223 @@ pub async fn generate_repoview_tables(
     }
 }
 
+// ── Reading the generated files back ─────────────────────────────────────
+//
+// The spec's "Endpoint Data table: click on this to load in another tab
+// (markdown rendered)" needs the browser to fetch what generate wrote - it
+// can't open files on the server. These two routes are that read side. They
+// only ever serve `Tables-meta.md` and `Tables-NNN.md` (exact-name check, so
+// no path can be smuggled in), and return JSON like the other read routes
+// (`{ok, body}` for saved request/response files) so the frontend's existing
+// JSON helper works unchanged.
+
+/// True only for `Tables-meta.md` or `Tables-<digits>.md` - the exact names
+/// `generate` writes, and the only files the read routes will touch.
+fn is_table_file_name(name: &str) -> bool {
+    if name == "Tables-meta.md" {
+        return true;
+    }
+    name.strip_prefix("Tables-")
+        .and_then(|rest| rest.strip_suffix(".md"))
+        .map(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+        .unwrap_or(false)
+}
+
+/// Meta first, then batches in numeric order (so `Tables-1000.md` sorts after
+/// `Tables-999.md`, which a plain string sort would get wrong).
+fn table_sort_key(name: &str) -> (u8, u64) {
+    if name == "Tables-meta.md" {
+        return (0, 0);
+    }
+    let number = name
+        .strip_prefix("Tables-")
+        .and_then(|rest| rest.strip_suffix(".md"))
+        .and_then(|digits| digits.parse::<u64>().ok())
+        .unwrap_or(u64::MAX);
+    (1, number)
+}
+
+/// Reads the `Approach:` line `generate` writes at the top of
+/// `Tables-meta.md` and maps it back to the API name.
+fn parse_approach_line(meta: &str) -> Option<&'static str> {
+    let label = meta.lines().find_map(|line| line.strip_prefix("Approach:"))?.trim();
+    [Approach::EndpointSegments, Approach::SortedTags]
+        .into_iter()
+        .find(|a| a.label() == label)
+        .map(|a| a.api_name())
+}
+
+fn is_registered(state: &AppState, name: &str) -> Result<bool, String> {
+    open_catalog(state)?
+        .get(ViewKind::Repoview, name)
+        .map(|row| row.is_some())
+        .map_err(|e| format!("{e:?}"))
+}
+
+/// GET /repoview/:name/tables - which generated files exist right now, and
+/// which approach produced them. `generated: false` (with an empty list)
+/// means generate hasn't been run yet, or the RepoView has no folder.
+pub async fn list_repoview_tables(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if let Err(e) = validate_repoview_name(&name) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e })));
+    }
+
+    let res = tokio::task::spawn_blocking({
+        let state = state.clone();
+        let name = name.clone();
+        move || -> Result<Option<serde_json::Value>, String> {
+            if !is_registered(&state, &name)? {
+                return Ok(None);
+            }
+            let dir = repoview_dir(&state, &name);
+
+            let mut files: Vec<(String, u64)> = Vec::new();
+            if dir.is_dir() {
+                for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+                    let entry = entry.map_err(|e| e.to_string())?;
+                    let file_name = entry.file_name().to_string_lossy().to_string();
+                    if is_table_file_name(&file_name) && entry.file_type().map_err(|e| e.to_string())?.is_file() {
+                        files.push((file_name, entry.metadata().map_err(|e| e.to_string())?.len()));
+                    }
+                }
+            }
+            files.sort_by_key(|(file_name, _)| table_sort_key(file_name));
+
+            let approach = std::fs::read_to_string(dir.join("Tables-meta.md"))
+                .ok()
+                .and_then(|meta| parse_approach_line(&meta));
+
+            Ok(Some(json!({
+                "ok": true,
+                "generated": !files.is_empty(),
+                "approach": approach,
+                "files": files
+                    .into_iter()
+                    .map(|(file_name, size_bytes)| json!({ "name": file_name, "size_bytes": size_bytes }))
+                    .collect::<Vec<_>>()
+            })))
+        }
+    })
+    .await;
+
+    match res {
+        Ok(Ok(Some(body))) => (StatusCode::OK, Json(body)),
+        Ok(Ok(None)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "error": format!("RepoView '{name}' does not exist") })),
+        ),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        ),
+    }
+}
+
+/// GET /repoview/:name/tables/:file - the markdown of one generated file,
+/// as `{ok, file, content}`. `file` must be `Tables-meta.md` or
+/// `Tables-NNN.md`; anything else is a 400, a missing/not-yet-generated file
+/// is a 404.
+pub async fn get_repoview_table_file(
+    State(state): State<AppState>,
+    Path((name, file)): Path<(String, String)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if let Err(e) = validate_repoview_name(&name) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e })));
+    }
+    if !is_table_file_name(&file) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "error": "file must be 'Tables-meta.md' or 'Tables-<number>.md'"
+            })),
+        );
+    }
+
+    let registered = tokio::task::spawn_blocking({
+        let state = state.clone();
+        let name = name.clone();
+        move || is_registered(&state, &name)
+    })
+    .await;
+    match registered {
+        Ok(Ok(true)) => {}
+        Ok(Ok(false)) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "ok": false, "error": format!("RepoView '{name}' does not exist") })),
+            )
+        }
+        Ok(Err(e)) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+        }
+    }
+
+    let path = repoview_dir(&state, &name).join(&file);
+    match tokio::fs::read_to_string(&path).await {
+        Ok(content) => (StatusCode::OK, Json(json!({ "ok": true, "file": file, "content": content }))),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "ok": false,
+                "error": format!(
+                    "{file} hasn't been generated for RepoView '{name}' - call POST /repoview/{name}/tables/generate first"
+                )
+            })),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn only_the_exact_generated_file_names_are_readable() {
+        for ok in ["Tables-meta.md", "Tables-001.md", "Tables-1000.md", "Tables-7.md"] {
+            assert!(is_table_file_name(ok), "{ok} should be allowed");
+        }
+        for bad in [
+            "", "repoview.sqlite", "Tables-.md", "Tables-001.md.bak", "tables-001.md", "Tables-0a1.md",
+            "../Tables-001.md", "Tables-001.md/../x", "Tables-meta.MD", "Tables-meta.md ", "sub/Tables-001.md",
+            "..\\Tables-001.md", "Tables--1.md",
+        ] {
+            assert!(!is_table_file_name(bad), "{bad:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn files_sort_meta_first_then_numerically() {
+        let mut names = vec!["Tables-1000.md", "Tables-002.md", "Tables-meta.md", "Tables-999.md", "Tables-001.md"];
+        names.sort_by_key(|n| table_sort_key(n));
+        assert_eq!(
+            names,
+            vec!["Tables-meta.md", "Tables-001.md", "Tables-002.md", "Tables-999.md", "Tables-1000.md"]
+        );
+    }
+
+    #[test]
+    fn approach_line_round_trips_through_the_meta_file() {
+        let dir = temp_dir("approach");
+        for approach in [Approach::EndpointSegments, Approach::SortedTags] {
+            write_batches(&dir, approach, &[item("a")], 10).unwrap();
+            let meta = std::fs::read_to_string(dir.join("Tables-meta.md")).unwrap();
+            assert_eq!(parse_approach_line(&meta), Some(approach.api_name()));
+        }
+        assert_eq!(parse_approach_line("# nothing here"), None);
+        assert_eq!(parse_approach_line("Approach: Something Else"), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
 
     fn temp_dir(label: &str) -> std::path::PathBuf {
         let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();

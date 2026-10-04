@@ -425,6 +425,19 @@ Content-Type: application/json
 
 { "approach": "sorted_tags", "batch_size": 50 }
 
+### --- Reading the generated files back (what the UI's "Endpoint Data table"
+### click loads) ---
+
+### Which files exist right now, and which approach produced them
+GET {{baseUrl}}/repoview/rtest-renamed/tables
+
+### The markdown of the master/navigation file, then of one batch
+# Only Tables-meta.md and Tables-<number>.md are ever served.
+GET {{baseUrl}}/repoview/rtest-renamed/tables/Tables-meta.md
+
+###
+GET {{baseUrl}}/repoview/rtest-renamed/tables/Tables-001.md
+
 ### --- Two-way merge: Collections <> RepoView ---
 
 ### Collection -> RepoView, after creation: merge members of ANY collection

@@ -76,6 +76,35 @@ pub(crate) fn repoview_data_dir(state: &AppState, name: &str) -> std::path::Path
     repoview_dir(state, name).join("globalEQPData")
 }
 
+/// A RepoView's name becomes a real folder name (`storage/repoviews/{name}`)
+/// and `delete` removes that whole folder, so it must never be able to point
+/// anywhere else: `..` would resolve to `storage/` itself. Also rejects what
+/// Windows hosts (this project's dev machines) can't use in a folder name.
+/// Applied wherever a name is *introduced* (create, rename, duplicate), and
+/// re-checked before `delete` touches the disk.
+pub(crate) fn validate_repoview_name(name: &str) -> Result<(), String> {
+    const FORBIDDEN: [char; 9] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+    if name.trim().is_empty() {
+        return Err("RepoView name can't be empty".to_string());
+    }
+    if name == "." || name == ".." {
+        return Err(format!("'{name}' isn't a valid RepoView name"));
+    }
+    if name != name.trim() || name.ends_with('.') {
+        return Err("RepoView name can't start or end with a space, or end with a dot".to_string());
+    }
+    if name.chars().count() > 100 {
+        return Err("RepoView name can't be longer than 100 characters".to_string());
+    }
+    if let Some(bad) = name.chars().find(|c| FORBIDDEN.contains(c) || c.is_control()) {
+        return Err(format!(
+            "RepoView name can't contain {:?} (it becomes a folder name)",
+            bad
+        ));
+    }
+    Ok(())
+}
+
 /// Recursively copies `src` into `dst`, creating directories as needed.
 /// Blocking — callers run this inside `spawn_blocking`. Best-effort at the
 /// call site: a source endpoint directory that doesn't exist yet (no QPs
@@ -607,6 +636,7 @@ pub async fn create_repoview_entry(
         let source_collection = payload.source_collection.clone();
         let requested_ids = payload.endpoint_ids.clone();
         move || -> Result<serde_json::Value, String> {
+            validate_repoview_name(&name)?;
             let catalog = open_catalog(&state)?;
             if catalog
                 .get(ViewKind::Repoview, &name)
@@ -926,6 +956,7 @@ pub async fn rename_repoview_entry(
         let old_name = name.clone();
         let new_name = payload.new_name.clone();
         move || -> Result<usize, String> {
+            validate_repoview_name(&new_name)?;
             let catalog = open_catalog(&state)?;
             if catalog
                 .get(ViewKind::Repoview, &old_name)
@@ -1036,9 +1067,13 @@ fn delete_repoview_sync(state: &AppState, name: &str) -> Result<(usize, bool), S
         .remove(ViewKind::Repoview, name)
         .map_err(|e| format!("{e:?}"))?;
 
+    // Re-check the name before touching the disk: `remove_dir_all` on a path
+    // built from an unvalidated name is the most destructive call in here. A
+    // row with an unsafe name (shouldn't exist, but) still gets its catalog
+    // entry removed; its folder is left alone.
     let dir = repoview_dir(state, name);
     let mut dir_deleted = false;
-    if dir.is_dir() {
+    if validate_repoview_name(name).is_ok() && dir.is_dir() {
         std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
         dir_deleted = true;
     }
@@ -1141,6 +1176,7 @@ pub async fn duplicate_repoview_entry(
         let old_name = name.clone();
         let new_name = new_name.clone();
         move || -> Result<serde_json::Value, String> {
+            validate_repoview_name(&new_name)?;
             let query = state
                 .queries
                 .get_catalog_query("REPOVIEW_GET")
@@ -1339,5 +1375,29 @@ pub async fn list_collection_endpoint_tags(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "ok": false, "error": e.to_string() })),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_repoview_name;
+
+    #[test]
+    fn accepts_ordinary_names() {
+        for ok in ["repo-one", "product catalog", "v2.0-final", "Café", "a"] {
+            assert!(validate_repoview_name(ok).is_ok(), "{ok} should be accepted");
+        }
+    }
+
+    #[test]
+    fn rejects_names_that_could_escape_or_break_the_folder() {
+        for bad in [
+            "", "   ", ".", "..", "../x", "a/b", "a\\b", "C:evil", "a*b", "a?b", "a\"b", "a<b", "a>b",
+            "a|b", " leading", "trailing ", "dot.", "tab\there", "nul\0byte",
+        ] {
+            assert!(validate_repoview_name(bad).is_err(), "{bad:?} should be rejected");
+        }
+        assert!(validate_repoview_name(&"x".repeat(101)).is_err());
+        assert!(validate_repoview_name(&"x".repeat(100)).is_ok());
     }
 }

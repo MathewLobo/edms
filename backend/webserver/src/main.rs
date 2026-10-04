@@ -67,7 +67,7 @@ use handlers::{
     repoview_merge::{
         add_endpoints_to_repoview, export_repoview_to_collection, import_tags_into_repoview,
     },
-    repoview_tables::generate_repoview_tables,
+    repoview_tables::{generate_repoview_tables, get_repoview_table_file, list_repoview_tables},
 };
 
 /// Resolves the EDMS storage root, per Ravi (2026-09-14): one single point
@@ -330,6 +330,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/repoview/:name/membership-tags", get(list_repoview_tags_for_name))
         .route("/repoview/by-tag/:tagname", get(repoviews_by_tag))
         .route("/repoview/:name/tables/generate", post(generate_repoview_tables))
+        .route("/repoview/:name/tables", get(list_repoview_tables))
+        .route("/repoview/:name/tables/:file", get(get_repoview_table_file))
         .route("/repoview/:name/endpoints/add", post(add_endpoints_to_repoview))
         .route("/repoview/:name/tags/import", post(import_tags_into_repoview))
         .route("/repoview/:name/export-to-collection", post(export_repoview_to_collection))
