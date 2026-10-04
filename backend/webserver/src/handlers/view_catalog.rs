@@ -80,7 +80,7 @@ pub(crate) fn repoview_data_dir(state: &AppState, name: &str) -> std::path::Path
 /// Blocking — callers run this inside `spawn_blocking`. Best-effort at the
 /// call site: a source endpoint directory that doesn't exist yet (no QPs
 /// recorded) isn't an error, it's just an EID with nothing to copy.
-fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+pub(crate) fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
@@ -113,14 +113,21 @@ pub(crate) fn open_existing_membership(
     open_membership(&path)
 }
 
-/// Collections-specific alias — every existing call site keeps working
-/// unchanged; only the error wording is now generic ("'name' does not
-/// exist") rather than "Collection 'name' does not exist".
+/// Collections' own lookup, kept exactly as it was before RepoView existed
+/// (including its "Collection '...'" error wording) — RepoView uses the
+/// generalized `open_existing_membership` above instead, so nothing about
+/// Collections' behavior changed.
 pub(crate) fn open_existing_collection_membership(
     state: &AppState,
     name: &str,
 ) -> Result<CollectionMembershipOps, String> {
-    open_existing_membership(state, ViewKind::Collections, name)
+    let catalog = open_catalog(state)?;
+    let row = catalog
+        .get(ViewKind::Collections, name)
+        .map_err(|e| format!("{e:?}"))?
+        .ok_or_else(|| format!("Collection '{name}' does not exist"))?;
+    let path = row.1.ok_or_else(|| format!("Collection '{name}' has no file yet"))?;
+    open_membership(&path)
 }
 
 async fn register_for(
@@ -634,33 +641,22 @@ pub async fn create_repoview_entry(
 
             let file_path = repoview_file_path(&state, &name);
             let membership = open_membership(&file_path)?;
-            let added = membership.add_batch(&endpoint_ids).map_err(|e| format!("{e:?}"))?;
 
-            let mut copied = 0usize;
-            for eid in &endpoint_ids {
-                let source_eid_dir = state.endpoint_storage_dir(eid);
-                if source_eid_dir.is_dir() {
-                    copy_dir_recursive(&source_eid_dir, &data_dir.join(eid))
-                        .map_err(|e| format!("failed to copy data for {eid}: {e}"))?;
-                    copied += 1;
-                }
-            }
-
-            // Copy each member's current central tags into the RepoView's
-            // own endpoint_tags table too — unlike Collections (reference-
-            // only, so tag-copying there is opt-in via export_existing_tags
-            // on /tags/import), a RepoView's whole point is being a
-            // complete, recoverable snapshot, so this isn't optional.
-            let tag_ops = TagOps::new(&state.db_path.display().to_string());
-            tag_ops.initialize().map_err(|e| format!("{e:?}"))?;
-            let mut tags_copied = 0usize;
-            for eid in &endpoint_ids {
-                for tag in tag_ops.get_by_endpoint(eid).map_err(|e| format!("{e:?}"))? {
-                    if membership.add_tag(eid, &tag).map_err(|e| format!("{e:?}"))? > 0 {
-                        tags_copied += 1;
-                    }
-                }
-            }
+            // Shared with add-from-collection and tag-import so "an endpoint
+            // enters a RepoView" means exactly one thing everywhere:
+            // membership, real data copy, tag copy, recovery snapshot.
+            let stats = crate::handlers::repoview_merge::ingest_endpoints(
+                &state,
+                &name,
+                &membership,
+                &endpoint_ids,
+            )
+            .map_err(|e| {
+                // Same rollback as a failed catalog insert below: don't
+                // leave a half-built folder behind.
+                let _ = std::fs::remove_dir_all(&dir);
+                e
+            })?;
 
             let query = state
                 .queries
@@ -682,9 +678,10 @@ pub async fn create_repoview_entry(
                 "name": name,
                 "file_path": file_path,
                 "source": source_collection,
-                "endpoints_added": added,
-                "endpoints_with_data_copied": copied,
-                "tags_copied": tags_copied,
+                "endpoints_added": stats.added,
+                "endpoints_with_data_copied": stats.data_copied,
+                "tags_copied": stats.tags_copied,
+                "qps_snapshotted": stats.qps_snapshotted,
                 "endpoints_requested": endpoint_ids.len()
             }))
         }
@@ -894,6 +891,9 @@ pub async fn remove_endpoint_from_repoview(
         move || -> Result<usize, String> {
             let membership = open_existing_membership(&state, ViewKind::Repoview, &name)?;
             let deleted = membership.remove(&endpoint_id).map_err(|e| format!("{e:?}"))?;
+            // Also drop what this RepoView holds for it beyond the member
+            // row and files: its copied tags and its recovery snapshots.
+            crate::handlers::repoview_merge::forget_endpoint(&membership, &endpoint_id)?;
             let copied_dir = repoview_data_dir(&state, &name).join(&endpoint_id);
             if copied_dir.is_dir() {
                 let _ = std::fs::remove_dir_all(&copied_dir);

@@ -400,19 +400,55 @@ GET {{baseUrl}}/repoview/rtest-renamed/membership-tags
 ### Find every repoview carrying a given tag
 GET {{baseUrl}}/repoview/by-tag/production
 
-### --- Index Table generation — Approach [B], Endpoint Segments ---
-# Replaces every existing Tables-*.md in the folder on each call. Not run
-# automatically on create or on membership changes — call this whenever
-# you want the generated files refreshed.
+### --- Index Table generation ---
+# Two approaches, one active at a time (both write the same Tables-NNN.md /
+# Tables-meta.md names, so generating one replaces the other). Replaces every
+# existing Tables-*.md on each call. Not run automatically on create or on
+# membership changes - call this whenever you want the files refreshed.
+# NOTE: a JSON body is always required, even if just {}.
 
-### Generate with the default batch size (100)
-POST {{baseUrl}}/repoview/rtest-renamed/tables/generate
-
-### Generate with an explicit batch size
+### Approach [B] Endpoint Segments (the default) with the default batch size (100)
 POST {{baseUrl}}/repoview/rtest-renamed/tables/generate
 Content-Type: application/json
 
-{ "batch_size": 50 }
+{}
+
+### Approach [B] with an explicit batch size
+POST {{baseUrl}}/repoview/rtest-renamed/tables/generate
+Content-Type: application/json
+
+{ "approach": "endpoint_segments", "batch_size": 50 }
+
+### Approach [A] Sorted Tags - tag -> segment-count pivot, untagged last
+POST {{baseUrl}}/repoview/rtest-renamed/tables/generate
+Content-Type: application/json
+
+{ "approach": "sorted_tags", "batch_size": 50 }
+
+### --- Two-way merge: Collections <> RepoView ---
+
+### Collection -> RepoView, after creation: merge members of ANY collection
+# in (omit endpoint_ids for all of them). Existing members are refreshed.
+POST {{baseUrl}}/repoview/rtest-renamed/endpoints/add
+Content-Type: application/json
+
+{ "source_collection": "content-api", "endpoint_ids": ["E0001-AAA"] }
+
+### Via Tag Ops: merge in every endpoint carrying any of these central tags
+POST {{baseUrl}}/repoview/rtest-renamed/tags/import
+Content-Type: application/json
+
+{ "tags": ["production"] }
+
+### RepoView -> Collection. Endpoints that no longer exist centrally are
+# rebuilt from the RepoView's own copy under their ORIGINAL ids; anything
+# that still exists centrally is left untouched. Skipped members (no
+# snapshot / URL+method now owned by another endpoint) are reported in
+# results and not added; top-level ok is false if any were skipped.
+POST {{baseUrl}}/repoview/rtest-renamed/export-to-collection
+Content-Type: application/json
+
+{ "collection": "recovered", "create_if_missing": true }
 
 ### --- Same four "tags" routes as webview above, scoped to repoview ---
 # (central tag-count rollup, separate from the membership routes above)
