@@ -139,7 +139,7 @@ pub fn insert_response_metadata(
     endpoint_id: &str,
     request_number: i32,
     file_path: &str,
-    status_code: i32,
+    status_code: Option<i32>,
     response_time_ms: Option<i32>,
 ) -> EdmsResult<usize> {
     let q = queries.get_response_query("RES1").ok_or(EdmsError::UnknownError)?;
@@ -182,6 +182,15 @@ pub fn delete_qp(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str, request
     let res_rows = core.proc(resq, &[&endpoint_id, &request_number])?;
 
     Ok(req_rows + res_rows)
+}
+
+/// Whether a specific QP pair's request_metadata row exists — used by the
+/// update route to 404 on an unknown request_number rather than silently
+/// writing files for a pair the DB never recorded.
+pub fn qp_exists(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str, request_number: i32) -> EdmsResult<bool> {
+    let q = queries.get_request_query("R9").ok_or(EdmsError::UnknownError)?;
+    let rows: Vec<i64> = core.cproc(q, &[&endpoint_id, &request_number], |row| row.get(0))?;
+    Ok(rows.first().copied().unwrap_or(0) > 0)
 }
 
 /* ---------------- history (queries.yaml) ---------------- */

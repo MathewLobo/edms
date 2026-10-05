@@ -75,6 +75,32 @@ GET {{baseUrl}}/test-view/get-user-profile/headers/1
 # status_code/response_time_ms are null if the response hasn't landed yet.
 GET {{baseUrl}}/test-view/get-user-profile/qps
 
+### Create a QP pair by hand — no real HTTP test runs
+# Writes the request/response files directly, plus an empty headers file.
+# status_code/response_time_ms are left null since there's no real response.
+# 404 if the endpoint doesn't exist. Response: {"ok":true,"request_number"}.
+# Side effect: broadcasts QpCreated on the shared WS channel.
+POST {{baseUrl}}/test-view/get-user-profile/qps/create
+Content-Type: application/json
+
+{
+  "method": "POST",
+  "request_body": "{\n  \"example\": \"new data\"\n}",
+  "response_body": "{\n  \"status\": \"success\"\n}"
+}
+
+### Update an existing QP pair's request/response bodies
+# Overwrites the two saved files in place. status_code/response_time_ms and
+# the headers file are left untouched. 404 if no such pair exists.
+# Side effect: broadcasts QpUpdated on the shared WS channel.
+POST {{baseUrl}}/test-view/get-user-profile/qps/1/update
+Content-Type: application/json
+
+{
+  "request_body": "{\n  \"example\": \"data\"\n}",
+  "response_body": "{\n  \"status\": \"success\"\n}"
+}
+
 ### Delete one QP pair
 # Removes its request_metadata/response_metadata rows and the three saved
 # JSON files (request/response/headers). 404 if no such pair exists.

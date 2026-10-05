@@ -67,6 +67,10 @@ requests:
     help: "List QP pairs for an endpoint — request+response metadata joined, ordered by request number"
     query: "SELECT r.request_number, r.method, r.timestamp, p.status_code, p.response_time_ms FROM request_metadata r LEFT JOIN response_metadata p ON p.endpoint_id = r.endpoint_id AND p.request_number = r.request_number WHERE r.endpoint_id = ? ORDER BY r.request_number"
 
+  R9:
+    help: "Check whether a specific QP pair (request_metadata row) exists"
+    query: "SELECT COUNT(*) FROM request_metadata WHERE endpoint_id = ? AND request_number = ?"
+
 responses:
   RES1:
     help: "Insert response metadata"

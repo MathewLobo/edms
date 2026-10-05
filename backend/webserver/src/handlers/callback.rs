@@ -173,7 +173,7 @@ async fn handle_run_test(state: &AppState, callback: &IpcCallback) {
                 &eid,
                 request_number,
                 &rf,
-                status_code,
+                Some(status_code),
                 Some(response_time_ms),
             )
         })
