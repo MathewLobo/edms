@@ -187,7 +187,7 @@ A different table from Collections' tag rollups above — tracks tags directly o
 
 ---
 
-## Webview / Repoview
+## Webview
 
 Same catalog pattern as Collections (register a name, list, per-view tag rollups) but **not** as far along — no independent SQLite file per instance yet (`file_path` stays `null`), and no endpoint-membership routes (no `webview/:name/endpoints/add` equivalent exists).
 
@@ -199,12 +199,42 @@ Same catalog pattern as Collections (register a name, list, per-view tag rollups
 | POST | `/webview/tags/delete` | `{"names"}` |
 | POST | `/webview/tags/rename` | `{"old_name","new_name"}` |
 | GET | `/webview/tags/list` | — |
-| POST | `/repoview/create` | `{"name"}` |
-| GET | `/repoview/list` | — |
-| POST | `/repoview/tags/create` | `{"name","endpoint_ids"?}` |
-| POST | `/repoview/tags/delete` | `{"names"}` |
-| POST | `/repoview/tags/rename` | `{"old_name","new_name"}` |
-| GET | `/repoview/tags/list` | — |
+
+---
+
+## Repoview
+
+Unlike Webview, a RepoView gets a real per-instance directory (`storage/repoviews/:name/`) holding its own membership SQLite file **and real copies** of each member's request/response/header files — not just references into the central tables (per Ravi, "EIDs converted to SQLite DBs with EID data put into EQP data folder, i.e. fully recoverable"). A RepoView is created **from** a Collection, and more can be merged in later from any Collection (`endpoints/add`) or by central tag (`tags/import`); it can also be exported back out into a Collection (`export-to-collection`), rebuilding any endpoint that has since been lost centrally — Ravi's two-way "Collections <> RepoView" (2026-09-29).
+
+| Method | Path | Body | Notes |
+|---|---|---|---|
+| POST | `/repoview/create` | `{"name","annotation"?,"source_collection","endpoint_ids"?}` | Copies the chosen members of `source_collection` (or all of them, if `endpoint_ids` is omitted/empty) — real request/response/header files, not references — **and** each member's current central tags into this RepoView's own `endpoint_tags` store (not optional, unlike Collections' `export_existing_tags` flag — a RepoView's whole point is being a complete, recoverable snapshot), **and** a snapshot of each endpoint's row (URL, method, annotation) and QP metadata, which is what makes `export-to-collection` recovery possible. **Request shape changed 2026-10:** `source_collection` is now required (previously just `{"name"}` created an empty, file-less row). **Name rules** (also enforced on `rename` and `duplicate`'s `new_name`): the name becomes a real folder, so it can't be empty, `.`/`..`, longer than 100 characters, start/end with a space, end with a dot, or contain `/ \ : * ? " < > |` or control characters (400). 400 if the name already exists, the source collection doesn't exist, or a requested id isn't a member of it |
+| POST | `/repoview/delete` | `{"names":[...]}` | Multi-select delete — each name deleted independently with its own result, so one bad name doesn't block the rest. Always `200`; check each entry's own `"ok"` in `results`. Top-level `"ok"` is `true` only if every name succeeded |
+| GET | `/repoview/list` | — | Catalog rows only (name/file_path/created_at/annotation) — no aggregate stats, see `GET /repoview/:name` for those |
+| GET | `/repoview/:name` | — | One RepoView's full catalog row plus every aggregate field: `eid_count`, `data_size_bytes`, `qp_count`, `tags_in_data`, `crud_types` (by HTTP method), and `source` (the collection it was created from). All computed live via joins/lookups against the membership file + central DB, not maintained as running counters. 404 if it doesn't exist |
+| GET | `/repoview/:name/endpoints` | — | List this RepoView's members with `added_at` |
+| POST | `/repoview/:name/endpoints/remove` | `{"endpoint_id"}` | Removes membership **and** deletes that endpoint's copied data, copied tags and recovery snapshot from this RepoView, so the aggregate stats above stay accurate |
+| POST | `/repoview/:name/rename` | `{"new_name"}` | Renames the catalog entry and moves the **whole RepoView directory** (not just one file, unlike Collections) to match |
+| POST | `/repoview/:name/annotation` | `{"annotation"}` | |
+| POST | `/repoview/:name/delete` | — | Removes the catalog row and deletes the whole RepoView directory (membership file + all copied data) from disk |
+| POST | `/repoview/:name/duplicate` | `{"new_name"}` | Clones the whole directory as-is (membership file, copied EQP data, any generated `Tables-*.md`) under a new name, plus the row's own annotation, source, and row-level membership-tags. No regeneration of the index tables — the underlying data doesn't change on duplicate, so they're still correct as copied. 400 if `new_name` already exists or the source RepoView doesn't exist |
+| POST | `/repoview/tags/create` | `{"name","endpoint_ids"?}` | Central tag-count rollup, same as Collections/Webview — separate from the per-RepoView membership above |
+| POST | `/repoview/tags/delete` | `{"names"}` | |
+| POST | `/repoview/tags/rename` | `{"old_name","new_name"}` | |
+| GET | `/repoview/tags/list` | — | |
+| POST | `/repoview/:name/membership-tags/add` | `{"tag"}` | Row-level tags on the RepoView instance itself — the spec's modifiable "Tags" field. Separate from both `tags_in_data` (the aggregate computed from copied endpoint data, above) and the central rollup immediately above. No existence check on `:name`, matching Collections' equivalent |
+| POST | `/repoview/:name/membership-tags/remove` | `{"tag"}` | |
+| GET | `/repoview/:name/membership-tags` | — | |
+| GET | `/repoview/by-tag/:tagname` | — | Returns `{"repoviews":[...]}` |
+| GET | `/repoview/:name/tags/endpoints` | — | List every (endpoint_id, tag) pair this RepoView carries in its own copy, from create's automatic tag copy above. **Three separate tag concepts, don't confuse them:** this is the per-endpoint copy; `tags_in_data` (in `GET /repoview/:name`) is read live from the central table instead; row-level `membership-tags` above tags the RepoView instance itself |
+| POST | `/repoview/:name/tables/generate` | `{"batch_size"?,"approach"?}` | Generates the Index Table per the Index Table wiki (2026-09-05). `approach` is `"endpoint_segments"` (default) or `"sorted_tags"` — only one is active at a time since both write the same `Tables-NNN.md` / `Tables-meta.md` names (generating one replaces the other); `Tables-meta.md` starts with an `Approach:` line saying which. **[B] endpoint_segments** — generic, no tags: one row per endpoint (`Segment Path | EID | Method`), sorted by URL path. **[A] sorted_tags** — a tag→segment pivot: one line per tag listing each distinct segment with its endpoint count (`/users{2}, /orders{1}`); an endpoint with several tags counts once under each; untagged endpoints land in a final `(untagged)` line; tags are read from this RepoView's own copy. `batch_size` (default 100) counts whole rows - endpoint-rows for B, tag-lines for A; **a tag's breakdown is never split across files** (a deliberate simplification of the wiki's partial-count `subset(N3)` sketch). **Replaces** every existing `Tables-*.md` on each call. Deliberately separate from `create` (a "zero time op") and not triggered by membership changes; the files go stale until regenerated. 400 on an unknown `approach` |
+| GET | `/repoview/:name/tables` | — | Which generated files exist right now: `{generated, approach, files:[{name,size_bytes}]}` (meta first, then batches in numeric order). `approach` is read from `Tables-meta.md`'s first line (`endpoint_segments` / `sorted_tags`). `generated:false` with an empty list means `tables/generate` hasn't been run. 404 if the RepoView doesn't exist |
+| GET | `/repoview/:name/tables/:file` | — | The markdown of one generated file as `{ok, file, content}` - this is what the UI's "Endpoint Data table" click loads (the browser can't read files on the server). `:file` must be exactly `Tables-meta.md` or `Tables-<number>.md`, nothing else is ever served (400 otherwise); 404 if that file hasn't been generated or the RepoView doesn't exist |
+| POST | `/repoview/:name/endpoints/add` | `{"source_collection","endpoint_ids"?}` | **Collection → RepoView, after creation.** Merges members of *any* Collection (omit `endpoint_ids` for all) into this existing RepoView, with the same copy-everything behaviour as `create`. Members already present are refreshed, not duplicated (`endpoints_added: 0`). Does not change the RepoView's recorded `source` |
+| POST | `/repoview/:name/tags/import` | `{"tags":[...]}` | The "via Tag Ops" merge: every endpoint carrying any of the given central tags is merged in, same as above |
+| POST | `/repoview/:name/export-to-collection` | `{"collection","endpoint_ids"?,"create_if_missing"?}` | **RepoView → Collection.** Adds the chosen members (default all) to a Collection. For any member that **no longer exists in the central tables**, first rebuilds it from this RepoView's own copy: the endpoint row under its *original EID* (reserved with the allocator so it can't be reissued), its files, QP metadata (original status codes/timings) and tags. An endpoint that still exists centrally is left completely untouched — nothing is overwritten or resurrected (e.g. a tag removed after the snapshot stays removed). A member that can't be restored (no snapshot, or another endpoint now owns the same URL+method — reported with that id) is skipped, reported in `results[].skipped`, and **not** added to the collection; top-level `ok` is then `false`. 400 if the Collection doesn't exist and `create_if_missing` isn't set |
+
+**Not built yet (waiting on Ravi's answers):** the spec's **Endpoint Segments (count)**, **Endpoint Tags (count)** and **Index Lists (count)** columns aren't in `GET /repoview/:name` yet - the exact definitions need confirming. Also open: whether index generation should move into Compute (his Index Table task says "goes into Compute"; it currently runs in the webserver), and whether RepoView changes should broadcast WebSocket events so other open views refresh. See Known Limitations for the other edges.
 
 ---
 
@@ -256,4 +286,13 @@ Same catalog pattern as Collections (register a name, list, per-view tag rollups
 - Deleting an endpoint now cascades its bookmarks correctly (2026-09-22), but **not** collection memberships or history/request/response data — those can still be left behind, orphaned, referencing a dead endpoint.
 - A QP (request/response pair — see Test View above) is generated automatically by every test run, not created/edited by hand. There's no route to edit a QP's saved request/response in place, only to list and delete.
 - Import (`/repo/:collection/:filename/import`) only extracts a zip to disk — it does not create/update endpoint, bookmark, or collection-membership DB rows from the imported files.
-- Webview/Repoview have no independent per-instance SQLite file yet (unlike Collections) and no endpoint-membership routes at all.
+- Webview still has no independent per-instance SQLite file (unlike Collections and now Repoview) and no endpoint-membership routes at all.
+- A RepoView's membership and copied data don't update when its source Collection changes — merges (`endpoints/add`, `tags/import`, `export-to-collection`) are explicit, point-in-time actions, not a live sync. Its `source` field stays the Collection it was *created* from; later merges from other Collections aren't recorded anywhere.
+- `export-to-collection` only rebuilds an endpoint that is missing from the central tables entirely. If an endpoint exists but lost some of its QPs/files, those are not restored (they may have been deleted on purpose). Restored QPs get a fresh timestamp, not their original one, and the target Collection's own `endpoint_tags` isn't populated.
+- Recovery assumes the RepoView is still registered in the central catalog. A RepoView *folder* carried to a brand-new instance can't be re-registered yet - its name, source and annotation live in the central DB, not in the folder. Needs a decision from Ravi (make the folder self-describing + add a register-existing route).
+- `GET /repoview/:name`'s `qp_count`, `crud_types` and `tags_in_data` are computed from the **central** tables, not the RepoView's own snapshot, so after central data is lost they under-report what the RepoView actually holds. (`eid_count` and `data_size_bytes` are always the RepoView's own.)
+- RepoViews created before the recovery snapshot existed have nothing to restore from until their members are re-merged in (`endpoints/add` refreshes the snapshot).
+- RepoView's aggregate stats (`GET /repoview/:name`) are computed live by looping over every member endpoint, not via a single batched join — fine at the sizes tested, but worth revisiting if a RepoView grows very large.
+- Renaming or deleting a RepoView doesn't cascade its row-level membership-tags (`repoview_tag_memberships`) — same pre-existing gap Collections has with `collection_tag_memberships`, not something new introduced here.
+- Index Table generation (`/repoview/:name/tables/generate`) is a point-in-time snapshot — it doesn't stay in sync with membership changes made afterward. Call it again to refresh.
+- `(endpoint_str, method)` is only a plain index centrally, not a unique one, so nothing in the DB itself stops two endpoints sharing a URL+method. `export-to-collection` guards against creating such a duplicate on restore; other paths rely on the frontend using `GET /endpoints/lookup` first.
