@@ -56,6 +56,17 @@ fn respond(res: Result<Result<Value, FrontPageError>, tokio::task::JoinError>) -
     }
 }
 
+/// Every WebView folder holds a `front-page.json` (v1.0 notes). A new one
+/// starts as an empty object, so the "Modify Frontpage" pop-up always has a
+/// file to open. Leaves an existing file alone.
+pub(crate) fn ensure_default(dir: &std::path::Path) -> Result<(), String> {
+    let path = dir.join(FRONT_PAGE_FILE);
+    if path.is_file() {
+        return Ok(());
+    }
+    std::fs::write(&path, "{}").map_err(|e| format!("couldn't create {FRONT_PAGE_FILE}: {e}"))
+}
+
 /// The WebView must exist (a front page only belongs to a real one) and its
 /// name must be safe to build a path from.
 fn existing_dir(state: &AppState, name: &str) -> Result<std::path::PathBuf, FrontPageError> {
@@ -136,4 +147,27 @@ pub async fn save_front_page(
     })
     .await;
     respond(res)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_front_page_is_an_empty_object_and_an_existing_one_is_kept() {
+        let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("edms-frontpage-{unique}"));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        ensure_default(&dir).unwrap();
+        let text = std::fs::read_to_string(dir.join(FRONT_PAGE_FILE)).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), json!({}));
+
+        std::fs::write(dir.join(FRONT_PAGE_FILE), r#"{"title":"mine"}"#).unwrap();
+        ensure_default(&dir).unwrap();
+        let text = std::fs::read_to_string(dir.join(FRONT_PAGE_FILE)).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), json!({"title": "mine"}));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

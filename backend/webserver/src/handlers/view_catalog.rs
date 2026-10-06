@@ -605,6 +605,12 @@ pub async fn create_repoview_entry(
                     let _ = std::fs::remove_dir_all(&dir);
                     e
                 })?;
+            if flavor == Flavor::Web {
+                crate::handlers::webview_front_page::ensure_default(&dir).map_err(|e| {
+                    let _ = std::fs::remove_dir_all(&dir);
+                    e
+                })?;
+            }
 
             let query = state
                 .queries

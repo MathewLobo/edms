@@ -362,6 +362,9 @@ fn combine_blocking(flavor: Flavor, state: &AppState, req: &CombineRequest) -> R
         let created = (|| -> Result<usize, String> {
             let target = open_membership(&file_path)?;
             let added = write_index(&target, &combined)?;
+            if flavor == Flavor::Web {
+                crate::handlers::webview_front_page::ensure_default(&dir)?;
+            }
             let query = state
                 .queries
                 .get_catalog_query(&flavor.catalog_query("CREATE"))

@@ -601,6 +601,11 @@ fn import_blocking(flavor: Flavor, state: &AppState, folder: &str, name_override
             .map(|text| std::fs::write(dir.join(FRONT_PAGE_FILE), text).is_ok())
             .unwrap_or(false);
 
+    // A takeout without a (valid) front page still gets the default one.
+    if flavor == Flavor::Web && !front_page_restored {
+        let _ = crate::handlers::webview_front_page::ensure_default(&dir);
+    }
+
     // The takeout's Tables name EIDs that no longer exist here, so rebuild
     // them (same approach) rather than copying stale files.
     let tables_regenerated = flavor.has_tables()

@@ -189,7 +189,7 @@ A different table from Collections' tag rollups above — tracks tags directly o
 
 ## Webview
 
-**v1.0 (Ravi, 2026-10-05/06): a WebView is the same list as a RepoView** ("UI is 99% identical for both"), so it has the same routes with `/webview` in place of `/repoview` and the same behaviour - see the Repoview section for what each one does. Its folder (`storage/webviews/:name/`) holds the SQLite index (`webview.sqlite`) and `front-page.json`, and no EQP data; row-level tags live in `webview_tag_memberships`, and `webview.source` records the Collection it was built from. The backend serves both from the same handlers (`handlers/view_flavor.rs`), so a fix to one is a fix to both, and a RepoView and a WebView with the same name don't interfere.
+**v1.0 (Ravi, 2026-10-05/06): a WebView is the same list as a RepoView** ("UI is 99% identical for both"), so it has the same routes with `/webview` in place of `/repoview` and the same behaviour - see the Repoview section for what each one does. Its folder (`storage/webviews/:name/`) holds the SQLite index (`webview.sqlite`) and `front-page.json` (an empty `{}` from the moment it is created, combined or imported, until the pop-up saves one), and no EQP data; row-level tags live in `webview_tag_memberships`, and `webview.source` records the Collection it was built from. The backend serves both from the same handlers (`handlers/view_flavor.rs`), so a fix to one is a fix to both, and a RepoView and a WebView with the same name don't interfere.
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
@@ -204,12 +204,12 @@ A different table from Collections' tag rollups above — tracks tags directly o
 | POST | `/webview/:name/convert-to-collection` | `{"collection","on_exists"?,"new_name"?}` | Same merge/rename 409 flow as RepoView |
 | POST | `/webview/combine` | `{"name","sources"?,"tags"?,"annotation"?,"on_exists"?,"new_name"?}` | Combines WebViews (never mixes in RepoViews: a RepoView name is "not found" here). Same rules as `/repoview/combine` |
 | POST | `/webview/:name/takeout` | `{"dest_name"?,"overwrite"?}` | Same as RepoView takeout; the takeout folder also holds `front-page.json` and the SQLite index is stripped (which is what compute's `validate_webview_format` requires: JSON only, no SQLite). Its manifest says `"kind":"webview"` |
-| POST | `/webview/import` | `{"folder","name"?}` | Reads `storage/imports/uncompressed/webview/{folder}/` (compute's folder for it). Fresh EIDs, same as RepoView import, and `front-page.json` is restored (`front_page_restored`). A takeout of the other kind is refused (400, naming the right route) |
+| POST | `/webview/import` | `{"folder","name"?}` | Reads `storage/imports/uncompressed/webview/{folder}/` (compute's folder for it). Fresh EIDs, same as RepoView import, and `front-page.json` is restored (`front_page_restored`; a takeout without one gets the default `{}`). A takeout of the other kind is refused (400, naming the right route) |
 | POST | `/webview/:name/membership-tags/add` | `{"tag"}` | Row-level tags |
 | POST | `/webview/:name/membership-tags/remove` | `{"tag"}` | |
 | GET | `/webview/:name/membership-tags` | - | |
 | GET | `/webview/by-tag/:tagname` | - | `{"webviews":[...]}` |
-| GET | `/webview/:name/front-page` | - | **Modify Frontpage** (the pop-up's load): `{ok, name, exists, front_page}`; `exists:false` and `front_page:null` until one is saved. 404 if the WebView doesn't exist |
+| GET | `/webview/:name/front-page` | - | **Modify Frontpage** (the pop-up's load): `{ok, name, exists, front_page}`; a new WebView returns `{}`. (`exists:false` / `null` only for a folder somehow missing the file.) 404 if the WebView doesn't exist |
 | POST | `/webview/:name/front-page` | `{"front_page":{...}}` | **Modify Frontpage** (save): replaces `front-page.json`. The notes don't define its fields, so it is stored as an opaque JSON object (400 if it isn't an object or is over 1 MB) and returned as is |
 | POST | `/webview/tags/create` | `{"name","endpoint_ids"?}` | Central tag-count rollup |
 | POST | `/webview/tags/delete` | `{"names"}` | |
