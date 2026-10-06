@@ -414,6 +414,43 @@ Content-Type: application/json
 
 { "collection": "my-collection", "on_exists": "rename", "new_name": "my-collection-2" }
 
+### --- Import / Export (takeout) ---
+# A RepoView is only a list, so this is the one place its EQP data is
+# touched. Takeout copies the data of every listed endpoint into
+# storage/takeout/{dest_name}/ with the SQLite index stripped (git/web
+# friendly), plus Tables-*.md and repoview-manifest.json (the endpoints'
+# URL/method/tags/QP status codes, which an EQP folder doesn't hold).
+
+### Take a RepoView out. 409 {conflict, options:["overwrite","rename"]} if
+# a takeout of that name already exists.
+POST {{baseUrl}}/repoview/rtest-renamed/takeout
+Content-Type: application/json
+
+{}
+
+### Overwrite the existing takeout, or give it another name
+POST {{baseUrl}}/repoview/rtest-renamed/takeout
+Content-Type: application/json
+
+{ "dest_name": "rtest-for-git", "overwrite": true }
+
+### Import: put the takeout folder (e.g. from git) in
+# storage/imports/uncompressed/repo/ and name it here. Every endpoint gets a
+# FRESH EID (the same URL may already exist under another one), its EQP files
+# are renamed to match, and the RepoView's index and Tables are rebuilt.
+# 409 {conflict, options:["rename"]} if the RepoView name is taken - retry
+# with "name".
+POST {{baseUrl}}/repoview/import
+Content-Type: application/json
+
+{ "folder": "rtest-for-git" }
+
+### Import under a different RepoView name
+POST {{baseUrl}}/repoview/import
+Content-Type: application/json
+
+{ "folder": "rtest-for-git", "name": "rtest-imported" }
+
 ### --- Tags on the RepoView itself (the list-level tag ops) ---
 # Separate from dataTags, the tags of the endpoints inside it.
 

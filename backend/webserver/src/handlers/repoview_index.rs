@@ -333,7 +333,7 @@ fn load_row(state: &AppState, tag_ops: &RepoviewTagMembershipOps, row: CatalogRo
     RepoviewRow { name, file_path, created_at, annotation, source, tags, stats, error }
 }
 
-fn catalog_rows(state: &AppState, key: &str, params: &[&dyn rusqlite::ToSql]) -> Result<Vec<CatalogRow>, String> {
+pub(crate) fn catalog_rows(state: &AppState, key: &str, params: &[&dyn rusqlite::ToSql]) -> Result<Vec<CatalogRow>, String> {
     let query = state
         .queries
         .get_catalog_query(key)

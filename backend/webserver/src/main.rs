@@ -64,6 +64,7 @@ use handlers::{
     repoview_tag_memberships::{
         add_repoview_tag, list_repoview_tags_for_name, remove_repoview_tag, repoviews_by_tag,
     },
+    repoview_ie::{import_repoview, takeout_repoview},
     repoview_index::{convert_repoview_to_collection, get_repoview_entry, list_repoviews},
     repoview_tables::{generate_repoview_tables, get_repoview_table_file, list_repoview_tables},
 };
@@ -330,6 +331,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/repoview/:name/tables", get(list_repoview_tables))
         .route("/repoview/:name/tables/:file", get(get_repoview_table_file))
         .route("/repoview/:name/convert-to-collection", post(convert_repoview_to_collection))
+        .route("/repoview/:name/takeout", post(takeout_repoview))
+        .route("/repoview/import", post(import_repoview))
         .route("/repoview/tags/create", post(create_repoview_tag))
         .route("/repoview/tags/delete", post(delete_repoview_tags))
         .route("/repoview/tags/rename", post(rename_repoview_tag))

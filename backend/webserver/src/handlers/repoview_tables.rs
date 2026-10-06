@@ -51,13 +51,13 @@ pub struct GenerateTablesRequest {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Approach {
+pub(crate) enum Approach {
     EndpointSegments,
     SortedTags,
 }
 
 impl Approach {
-    fn parse(raw: Option<&str>) -> Result<Self, String> {
+    pub(crate) fn parse(raw: Option<&str>) -> Result<Self, String> {
         match raw.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
             None | Some("") | Some("endpoint_segments") => Ok(Self::EndpointSegments),
             Some("sorted_tags") => Ok(Self::SortedTags),
@@ -251,6 +251,96 @@ fn write_batches(
     Ok(files_written)
 }
 
+/// The whole generate operation, callable from anywhere that already has
+/// the pieces (the route below, and Import, which regenerates the Tables
+/// once it has assigned new EIDs). Blocking - run it in `spawn_blocking`.
+pub(crate) fn generate_tables_blocking(
+    state: &AppState,
+    name: &str,
+    approach: Approach,
+    batch_size: usize,
+) -> Result<serde_json::Value, String> {
+    let membership = open_existing_membership(&state, ViewKind::Repoview, &name)?;
+
+    // Straight from the RepoView's own index - it describes itself,
+    // so these files don't depend on the central tables at all.
+    let mut members: Vec<MemberRow> = snapshot_endpoints(&membership)?
+        .into_iter()
+        .map(|(endpoint_id, endpoint_str, method)| MemberRow {
+            segment_path: segment_path(&endpoint_str),
+            endpoint_id,
+            method,
+        })
+        .collect();
+
+    let dir = repoview_dir(&state, &name);
+    if !dir.is_dir() {
+        return Err(format!("RepoView '{name}' has no folder yet"));
+    }
+
+    let items: Vec<Item> = match approach {
+        Approach::EndpointSegments => {
+            members.sort_by(|a, b| {
+                a.segment_path
+                    .cmp(&b.segment_path)
+                    .then(a.endpoint_id.cmp(&b.endpoint_id))
+            });
+            members
+                .iter()
+                .map(|m| Item {
+                    key: m.segment_path.clone(),
+                    row: format!(
+                        "| {} | {} | {} |",
+                        md_cell(&m.segment_path),
+                        m.endpoint_id,
+                        m.method
+                    ),
+                })
+                .collect()
+        }
+        Approach::SortedTags => {
+            let mut tags_by_endpoint: HashMap<String, Vec<String>> = HashMap::new();
+            for (eid, tag) in membership.list_all_endpoint_tags().map_err(|e| format!("{e:?}"))? {
+                tags_by_endpoint.entry(eid).or_default().push(tag);
+            }
+            let pairs: Vec<(String, Vec<String>)> = members
+                .iter()
+                .map(|m| {
+                    (
+                        m.segment_path.clone(),
+                        tags_by_endpoint.remove(&m.endpoint_id).unwrap_or_default(),
+                    )
+                })
+                .collect();
+            build_tag_lines(&pairs)
+                .into_iter()
+                .map(|(tag, segments)| {
+                    let cell = segments
+                        .iter()
+                        .map(|(segment, count)| format!("{}{{{}}}", md_cell(segment), count))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    Item {
+                        key: tag.clone(),
+                        row: format!("| {} | {} |", md_cell(&tag), cell),
+                    }
+                })
+                .collect()
+        }
+    };
+
+    let files_written = write_batches(&dir, approach, &items, batch_size)?;
+
+    Ok(json!({
+        "ok": true,
+        "approach": approach.api_name(),
+        "batch_size": batch_size,
+        "total_endpoints": members.len(),
+        "rows": items.len(),
+        "files_written": files_written
+    }))
+}
+
 /// POST /repoview/:name/tables/generate
 ///
 /// Deliberately NOT run as part of create (a "zero time op" per the spec)
@@ -275,87 +365,7 @@ pub async fn generate_repoview_tables(
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
         let name = name.clone();
-        move || -> Result<serde_json::Value, String> {
-            let membership = open_existing_membership(&state, ViewKind::Repoview, &name)?;
-
-            // Straight from the RepoView's own index - it describes itself,
-            // so these files don't depend on the central tables at all.
-            let mut members: Vec<MemberRow> = snapshot_endpoints(&membership)?
-                .into_iter()
-                .map(|(endpoint_id, endpoint_str, method)| MemberRow {
-                    segment_path: segment_path(&endpoint_str),
-                    endpoint_id,
-                    method,
-                })
-                .collect();
-
-            let dir = repoview_dir(&state, &name);
-            if !dir.is_dir() {
-                return Err(format!("RepoView '{name}' has no folder yet"));
-            }
-
-            let items: Vec<Item> = match approach {
-                Approach::EndpointSegments => {
-                    members.sort_by(|a, b| {
-                        a.segment_path
-                            .cmp(&b.segment_path)
-                            .then(a.endpoint_id.cmp(&b.endpoint_id))
-                    });
-                    members
-                        .iter()
-                        .map(|m| Item {
-                            key: m.segment_path.clone(),
-                            row: format!(
-                                "| {} | {} | {} |",
-                                md_cell(&m.segment_path),
-                                m.endpoint_id,
-                                m.method
-                            ),
-                        })
-                        .collect()
-                }
-                Approach::SortedTags => {
-                    let mut tags_by_endpoint: HashMap<String, Vec<String>> = HashMap::new();
-                    for (eid, tag) in membership.list_all_endpoint_tags().map_err(|e| format!("{e:?}"))? {
-                        tags_by_endpoint.entry(eid).or_default().push(tag);
-                    }
-                    let pairs: Vec<(String, Vec<String>)> = members
-                        .iter()
-                        .map(|m| {
-                            (
-                                m.segment_path.clone(),
-                                tags_by_endpoint.remove(&m.endpoint_id).unwrap_or_default(),
-                            )
-                        })
-                        .collect();
-                    build_tag_lines(&pairs)
-                        .into_iter()
-                        .map(|(tag, segments)| {
-                            let cell = segments
-                                .iter()
-                                .map(|(segment, count)| format!("{}{{{}}}", md_cell(segment), count))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            Item {
-                                key: tag.clone(),
-                                row: format!("| {} | {} |", md_cell(&tag), cell),
-                            }
-                        })
-                        .collect()
-                }
-            };
-
-            let files_written = write_batches(&dir, approach, &items, batch_size)?;
-
-            Ok(json!({
-                "ok": true,
-                "approach": approach.api_name(),
-                "batch_size": batch_size,
-                "total_endpoints": members.len(),
-                "rows": items.len(),
-                "files_written": files_written
-            }))
-        }
+        move || generate_tables_blocking(&state, &name, approach, batch_size)
     })
     .await;
 
@@ -407,7 +417,7 @@ fn table_sort_key(name: &str) -> (u8, u64) {
 
 /// Reads the `Approach:` line `generate` writes at the top of
 /// `Tables-meta.md` and maps it back to the API name.
-fn parse_approach_line(meta: &str) -> Option<&'static str> {
+pub(crate) fn parse_approach_line(meta: &str) -> Option<&'static str> {
     let label = meta.lines().find_map(|line| line.strip_prefix("Approach:"))?.trim();
     [Approach::EndpointSegments, Approach::SortedTags]
         .into_iter()

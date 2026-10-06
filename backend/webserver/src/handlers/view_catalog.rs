@@ -77,7 +77,15 @@ pub(crate) fn repoview_file_path(state: &AppState, name: &str) -> String {
 /// Applied wherever a name is *introduced* (create, rename, duplicate), and
 /// re-checked before `delete` touches the disk.
 pub(crate) fn validate_repoview_name(name: &str) -> Result<(), String> {
-    validate_folder_name(name, "RepoView name")
+    validate_folder_name(name, "RepoView name")?;
+    // Words that are fixed routes under /repoview/ (`/repoview/list`,
+    // `/repoview/import`, ...) - a RepoView with one of these names could
+    // never be fetched by name, because the fixed route would win.
+    const RESERVED: [&str; 6] = ["list", "create", "delete", "import", "tags", "by-tag"];
+    if RESERVED.iter().any(|word| name.eq_ignore_ascii_case(word)) {
+        return Err(format!("'{name}' is reserved (it's a fixed /repoview route) - pick another RepoView name"));
+    }
+    Ok(())
 }
 
 /// The same rules for any name that becomes a file or folder name - used for
@@ -1164,6 +1172,16 @@ mod tests {
         for ok in ["repo-one", "product catalog", "v2.0-final", "Café", "a"] {
             assert!(validate_repoview_name(ok).is_ok(), "{ok} should be accepted");
         }
+    }
+
+    #[test]
+    fn rejects_names_that_would_be_shadowed_by_a_fixed_route() {
+        for word in ["list", "create", "delete", "import", "tags", "by-tag", "LIST", "Import"] {
+            assert!(validate_repoview_name(word).is_err(), "{word} is a route word");
+        }
+        // only whole words are reserved
+        assert!(validate_repoview_name("my-list").is_ok());
+        assert!(validate_repoview_name("imports").is_ok());
     }
 
     #[test]
