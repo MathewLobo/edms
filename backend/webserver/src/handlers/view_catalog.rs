@@ -59,21 +59,15 @@ pub(crate) fn open_membership(file_path: &str) -> Result<CollectionMembershipOps
     Ok(ops)
 }
 
-/// A RepoView gets its own directory, unlike a collection's single flat
-/// file — per Ravi (2026-09-22ish): "EIDs converted to SQLite DBs with EID
-/// data put into EQP data folder, i.e. fully recoverable." So a RepoView
-/// holds both a membership file AND real copies of each member's request/
-/// response/header files, not just references into the central tables.
+/// A RepoView gets its own directory, unlike a collection's single flat file:
+/// the SQLite index (`repoview.sqlite`) plus the generated `Tables-*.md`.
+/// No EQP data lives here (v1.0) - that is only copied at Import/Export.
 pub(crate) fn repoview_dir(state: &AppState, name: &str) -> std::path::PathBuf {
     state.storage_root.join("storage").join("repoviews").join(name)
 }
 
 pub(crate) fn repoview_file_path(state: &AppState, name: &str) -> String {
     repoview_dir(state, name).join("repoview.sqlite").display().to_string()
-}
-
-pub(crate) fn repoview_data_dir(state: &AppState, name: &str) -> std::path::PathBuf {
-    repoview_dir(state, name).join("globalEQPData")
 }
 
 /// A RepoView's name becomes a real folder name (`storage/repoviews/{name}`)
@@ -83,24 +77,28 @@ pub(crate) fn repoview_data_dir(state: &AppState, name: &str) -> std::path::Path
 /// Applied wherever a name is *introduced* (create, rename, duplicate), and
 /// re-checked before `delete` touches the disk.
 pub(crate) fn validate_repoview_name(name: &str) -> Result<(), String> {
+    validate_folder_name(name, "RepoView name")
+}
+
+/// The same rules for any name that becomes a file or folder name - used for
+/// the Collection that "Convert to Collection" creates too (its file is
+/// `storage/collections/{name}.sqlite`). `what` is only for the message.
+pub(crate) fn validate_folder_name(name: &str, what: &str) -> Result<(), String> {
     const FORBIDDEN: [char; 9] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
     if name.trim().is_empty() {
-        return Err("RepoView name can't be empty".to_string());
+        return Err(format!("{what} can't be empty"));
     }
     if name == "." || name == ".." {
-        return Err(format!("'{name}' isn't a valid RepoView name"));
+        return Err(format!("'{name}' isn't a valid {what}"));
     }
     if name != name.trim() || name.ends_with('.') {
-        return Err("RepoView name can't start or end with a space, or end with a dot".to_string());
+        return Err(format!("{what} can't start or end with a space, or end with a dot"));
     }
     if name.chars().count() > 100 {
-        return Err("RepoView name can't be longer than 100 characters".to_string());
+        return Err(format!("{what} can't be longer than 100 characters"));
     }
     if let Some(bad) = name.chars().find(|c| FORBIDDEN.contains(c) || c.is_control()) {
-        return Err(format!(
-            "RepoView name can't contain {:?} (it becomes a folder name)",
-            bad
-        ));
+        return Err(format!("{what} can't contain {bad:?} (it becomes a file or folder name)"));
     }
     Ok(())
 }
@@ -603,11 +601,12 @@ pub async fn list_webviews(State(state): State<AppState>) -> (StatusCode, Json<s
 
 // ── RepoView ──────────────────────────────────────────────────────────
 //
-// A RepoView is created FROM a Collection — per Ravi (2026-09-29ish),
-// "Bookmark Tag" / Source is the collection name a RepoView's data was
-// copied from. This is the only way data enters a RepoView right now;
-// the two-way merge (importing more later, or back into a Collection)
-// isn't built yet.
+// v1.0 (Ravi, 2026-10-05/06): a RepoView is a LIST - a SQLite index (members
+// plus a snapshot of their endpoint rows, tags and QP metadata) and the
+// Tables-*.md files. It holds no EQP data; that is copied out of
+// globalEQPData only at Import/Export (takeout) time, which keeps Create
+// instant (the spec's "zero time" op). It's created FROM a Collection;
+// "Bookmark Tag" / Source records which one.
 
 #[derive(Debug, Deserialize)]
 pub struct CreateRepoviewRequest {
@@ -615,16 +614,15 @@ pub struct CreateRepoviewRequest {
     #[serde(default)]
     pub annotation: Option<String>,
     pub source_collection: String,
-    /// Which members of `source_collection` to copy in. Omitted or empty
+    /// Which members of `source_collection` to list. Omitted or empty
     /// means "all of them".
     #[serde(default)]
     pub endpoint_ids: Option<Vec<String>>,
 }
 
-/// POST /repoview/create — copies the chosen endpoints (real request/
-/// response/header files, not just references) out of `source_collection`
-/// into this RepoView's own directory, and registers the catalog row with
-/// `source` recorded.
+/// POST /repoview/create - builds the list: registers the catalog row (with
+/// `source`) and indexes the chosen members of `source_collection` into the
+/// RepoView's own SQLite. No EQP data is copied.
 pub async fn create_repoview_entry(
     State(state): State<AppState>,
     Json(payload): Json<CreateRepoviewRequest>,
@@ -666,27 +664,18 @@ pub async fn create_repoview_entry(
             };
 
             let dir = repoview_dir(&state, &name);
-            let data_dir = repoview_data_dir(&state, &name);
-            std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
             let file_path = repoview_file_path(&state, &name);
             let membership = open_membership(&file_path)?;
 
-            // Shared with add-from-collection and tag-import so "an endpoint
-            // enters a RepoView" means exactly one thing everywhere:
-            // membership, real data copy, tag copy, recovery snapshot.
-            let stats = crate::handlers::repoview_merge::ingest_endpoints(
-                &state,
-                &name,
-                &membership,
-                &endpoint_ids,
-            )
-            .map_err(|e| {
-                // Same rollback as a failed catalog insert below: don't
-                // leave a half-built folder behind.
-                let _ = std::fs::remove_dir_all(&dir);
-                e
-            })?;
+            let stats = crate::handlers::repoview_index::build_index(&state, &membership, &endpoint_ids)
+                .map_err(|e| {
+                    // Same rollback as a failed catalog insert below: don't
+                    // leave a half-built folder behind.
+                    let _ = std::fs::remove_dir_all(&dir);
+                    e
+                })?;
 
             let query = state
                 .queries
@@ -709,9 +698,9 @@ pub async fn create_repoview_entry(
                 "file_path": file_path,
                 "source": source_collection,
                 "endpoints_added": stats.added,
-                "endpoints_with_data_copied": stats.data_copied,
                 "tags_copied": stats.tags_copied,
                 "qps_snapshotted": stats.qps_snapshotted,
+                "data_size_bytes": stats.data_size_bytes,
                 "endpoints_requested": endpoint_ids.len()
             }))
         }
@@ -723,218 +712,6 @@ pub async fn create_repoview_entry(
             state.refresh_dashboard_snapshot();
             (StatusCode::OK, Json(body))
         }
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "ok": false, "error": e.to_string() })),
-        ),
-    }
-}
-
-pub async fn list_repoviews(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
-    list_for(ViewKind::Repoview, state).await
-}
-
-/// GET /repoview/:name — one RepoView's catalog row plus every aggregate
-/// field the spec asks for: EID Count, Data Size, QP Count, Tags in Data,
-/// CRUD Types, and Source. Computed live via joins/lookups against the
-/// membership file + central DB (per the SQLite-way decision, 2026-09-29),
-/// not maintained as running counters.
-pub async fn get_repoview_entry(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let res = tokio::task::spawn_blocking({
-        let state = state.clone();
-        let name = name.clone();
-        move || -> Result<Option<serde_json::Value>, String> {
-            let query = state
-                .queries
-                .get_catalog_query("REPOVIEW_GET")
-                .ok_or(edms::error::EdmsError::UnknownError)
-                .map_err(|e| format!("{e:?}"))?;
-            let catalog = open_catalog(&state)?;
-            let row: Option<(String, Option<String>, String, Option<String>, Option<String>)> =
-                catalog
-                    .core
-                    .cproc(query, &[&name], |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-                    })
-                    .map_err(|e| format!("{e:?}"))?
-                    .into_iter()
-                    .next();
-
-            let Some((name, file_path, created_at, annotation, source)) = row else {
-                return Ok(None);
-            };
-
-            let Some(file_path) = file_path else {
-                // Registered but never given a real folder — shouldn't
-                // happen through create_repoview_entry above, but an old
-                // row from before this pass could still be in this state.
-                return Ok(Some(json!({
-                    "ok": true, "name": name, "file_path": serde_json::Value::Null,
-                    "created_at": created_at, "annotation": annotation, "source": source,
-                    "eid_count": 0, "data_size_bytes": 0, "qp_count": 0,
-                    "tags_in_data": [], "crud_types": {}
-                })));
-            };
-
-            let membership = open_membership(&file_path)?;
-            let member_ids = membership.list_ids().map_err(|e| format!("{e:?}"))?;
-
-            let data_size_bytes = compute::table_view::compute_size(&repoview_dir(&state, &name));
-
-            let tag_ops = TagOps::new(&state.db_path.display().to_string());
-            tag_ops.initialize().map_err(|e| format!("{e:?}"))?;
-
-            let mut qp_count = 0usize;
-            let mut tags_in_data: HashSet<String> = HashSet::new();
-            let mut crud_types: std::collections::BTreeMap<String, usize> =
-                std::collections::BTreeMap::new();
-            for eid in &member_ids {
-                qp_count += db::list_qps_for_endpoint(&state.core, &state.queries, eid)
-                    .map_err(|e| format!("{e:?}"))?
-                    .len();
-                tags_in_data.extend(tag_ops.get_by_endpoint(eid).map_err(|e| format!("{e:?}"))?);
-                if let Some(endpoint) = db::get_endpoint(&state.core, &state.queries, eid)
-                    .map_err(|e| format!("{e:?}"))?
-                {
-                    let method = endpoint.method.unwrap_or_else(|| "UNCLASSIFIED".to_string());
-                    *crud_types.entry(method).or_insert(0) += 1;
-                }
-            }
-
-            Ok(Some(json!({
-                "ok": true,
-                "name": name,
-                "file_path": file_path,
-                "created_at": created_at,
-                "annotation": annotation,
-                "source": source,
-                "eid_count": member_ids.len(),
-                "data_size_bytes": data_size_bytes,
-                "qp_count": qp_count,
-                "tags_in_data": tags_in_data.into_iter().collect::<Vec<_>>(),
-                "crud_types": crud_types
-            })))
-        }
-    })
-    .await;
-
-    match res {
-        Ok(Ok(Some(body))) => (StatusCode::OK, Json(body)),
-        Ok(Ok(None)) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "ok": false, "error": format!("RepoView '{name}' does not exist") })),
-        ),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "ok": false, "error": e.to_string() })),
-        ),
-    }
-}
-
-/// GET /repoview/:name/endpoints — list this RepoView's members.
-pub async fn list_repoview_endpoints(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let res = tokio::task::spawn_blocking({
-        let state = state.clone();
-        let name = name.clone();
-        move || -> Result<Vec<(String, String)>, String> {
-            let membership = open_existing_membership(&state, ViewKind::Repoview, &name)?;
-            let entries = membership.list().map_err(|e| format!("{e:?}"))?;
-            Ok(entries.into_iter().map(|e| (e.endpoint_id, e.added_at)).collect())
-        }
-    })
-    .await;
-
-    match res {
-        Ok(Ok(entries)) => (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "endpoints": entries.into_iter().map(|(endpoint_id, added_at)| json!({
-                    "endpoint_id": endpoint_id, "added_at": added_at
-                })).collect::<Vec<_>>()
-            })),
-        ),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "ok": false, "error": e.to_string() })),
-        ),
-    }
-}
-
-/// GET /repoview/:name/tags/endpoints — list every (endpoint_id, tag) pair
-/// this RepoView carries in its own copy (from create's automatic tag
-/// copy, above) — separate from the central tags table and from this
-/// RepoView's own row-level membership-tags.
-pub async fn list_repoview_endpoint_tags(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let res = tokio::task::spawn_blocking({
-        let state = state.clone();
-        let name = name.clone();
-        move || -> Result<Vec<(String, String)>, String> {
-            let membership = open_existing_membership(&state, ViewKind::Repoview, &name)?;
-            membership.list_all_endpoint_tags().map_err(|e| format!("{e:?}"))
-        }
-    })
-    .await;
-
-    match res {
-        Ok(Ok(pairs)) => (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "tags": pairs.into_iter().map(|(endpoint_id, tag)| json!({
-                    "endpoint_id": endpoint_id, "tag": tag
-                })).collect::<Vec<_>>()
-            })),
-        ),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "ok": false, "error": e.to_string() })),
-        ),
-    }
-}
-
-/// POST /repoview/:name/endpoints/remove — removes membership AND deletes
-/// that endpoint's copied data from this RepoView's own folder, so Data
-/// Size/EID Count/QP Count stay accurate.
-pub async fn remove_endpoint_from_repoview(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Json(payload): Json<EndpointIdRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let res = tokio::task::spawn_blocking({
-        let state = state.clone();
-        let name = name.clone();
-        let endpoint_id = payload.endpoint_id.clone();
-        move || -> Result<usize, String> {
-            let membership = open_existing_membership(&state, ViewKind::Repoview, &name)?;
-            let deleted = membership.remove(&endpoint_id).map_err(|e| format!("{e:?}"))?;
-            // Also drop what this RepoView holds for it beyond the member
-            // row and files: its copied tags and its recovery snapshots.
-            crate::handlers::repoview_merge::forget_endpoint(&membership, &endpoint_id)?;
-            let copied_dir = repoview_data_dir(&state, &name).join(&endpoint_id);
-            if copied_dir.is_dir() {
-                let _ = std::fs::remove_dir_all(&copied_dir);
-            }
-            Ok(deleted)
-        }
-    })
-    .await;
-
-    match res {
-        Ok(Ok(deleted)) => (StatusCode::OK, Json(json!({ "ok": true, "deleted": deleted }))),
         Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

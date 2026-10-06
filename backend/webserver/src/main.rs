@@ -46,11 +46,11 @@ use handlers::{
         annotate_collection_entry, annotate_repoview_entry, create_collection_entry,
         create_repoview_entry, create_webview_entry, delete_collection_entry,
         delete_repoview_entry, delete_repoviews_bulk, duplicate_repoview_entry,
-        get_collection_entry, get_repoview_entry,
+        get_collection_entry,
         import_tags_into_collection, list_collection_endpoint_tags, list_collection_endpoints,
-        list_collections, list_repoview_endpoint_tags, list_repoview_endpoints, list_repoviews,
+        list_collections,
         list_webviews,
-        remove_endpoint_from_collection, remove_endpoint_from_repoview, rename_collection_entry,
+        remove_endpoint_from_collection, rename_collection_entry,
         rename_repoview_entry,
     },
     view_tags::{
@@ -64,9 +64,7 @@ use handlers::{
     repoview_tag_memberships::{
         add_repoview_tag, list_repoview_tags_for_name, remove_repoview_tag, repoviews_by_tag,
     },
-    repoview_merge::{
-        add_endpoints_to_repoview, export_repoview_to_collection, import_tags_into_repoview,
-    },
+    repoview_index::{convert_repoview_to_collection, get_repoview_entry, list_repoviews},
     repoview_tables::{generate_repoview_tables, get_repoview_table_file, list_repoview_tables},
 };
 
@@ -324,9 +322,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/repoview/:name/annotation", post(annotate_repoview_entry))
         .route("/repoview/:name/delete", post(delete_repoview_entry))
         .route("/repoview/:name/duplicate", post(duplicate_repoview_entry))
-        .route("/repoview/:name/endpoints/remove", post(remove_endpoint_from_repoview))
-        .route("/repoview/:name/endpoints", get(list_repoview_endpoints))
-        .route("/repoview/:name/tags/endpoints", get(list_repoview_endpoint_tags))
         .route("/repoview/:name/membership-tags/add", post(add_repoview_tag))
         .route("/repoview/:name/membership-tags/remove", post(remove_repoview_tag))
         .route("/repoview/:name/membership-tags", get(list_repoview_tags_for_name))
@@ -334,9 +329,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/repoview/:name/tables/generate", post(generate_repoview_tables))
         .route("/repoview/:name/tables", get(list_repoview_tables))
         .route("/repoview/:name/tables/:file", get(get_repoview_table_file))
-        .route("/repoview/:name/endpoints/add", post(add_endpoints_to_repoview))
-        .route("/repoview/:name/tags/import", post(import_tags_into_repoview))
-        .route("/repoview/:name/export-to-collection", post(export_repoview_to_collection))
+        .route("/repoview/:name/convert-to-collection", post(convert_repoview_to_collection))
         .route("/repoview/tags/create", post(create_repoview_tag))
         .route("/repoview/tags/delete", post(delete_repoview_tags))
         .route("/repoview/tags/rename", post(rename_repoview_tag))

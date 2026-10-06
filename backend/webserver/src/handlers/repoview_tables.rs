@@ -31,8 +31,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path as FsPath;
 
 use crate::{
-    db,
-    handlers::view_catalog::{open_catalog, open_existing_membership, repoview_dir, validate_repoview_name},
+    handlers::{
+        repoview_index::snapshot_endpoints,
+        view_catalog::{open_catalog, open_existing_membership, repoview_dir, validate_repoview_name},
+    },
     state::AppState,
 };
 
@@ -107,7 +109,7 @@ struct MemberRow {
 /// examples. Falls back to the raw string if it doesn't look like a URL,
 /// so a malformed `endpoint_str` still sorts somewhere instead of
 /// vanishing from the output.
-fn segment_path(endpoint_str: &str) -> String {
+pub(crate) fn segment_path(endpoint_str: &str) -> String {
     // No "://" at all means this doesn't look like a URL - return it
     // verbatim rather than guessing, so it still sorts somewhere instead
     // of silently becoming "/".
@@ -125,6 +127,18 @@ fn segment_path(endpoint_str: &str) -> String {
     } else {
         path.to_string()
     }
+}
+
+/// The individual path components of an endpoint's URL - what the UI calls
+/// its "segments" (`getEndpointSegments` in repoview.js is exactly
+/// `split('/')` + drop empties). `https://x.com/users/:id/orders` gives
+/// `["users", ":id", "orders"]`.
+pub(crate) fn path_segments(endpoint_str: &str) -> Vec<String> {
+    segment_path(endpoint_str)
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .map(|part| part.to_string())
+        .collect()
 }
 
 /// Keeps a value from breaking out of its markdown table cell.
@@ -244,9 +258,9 @@ fn write_batches(
 /// consuming" action, same category as delete/duplicate. Replaces every
 /// existing Tables-*.md in the folder on each call.
 ///
-/// [A] reads tags from the RepoView's *own* copy (`endpoint_tags`, filled
-/// at create / add time) rather than the central table, so the index
-/// reflects this RepoView as a self-contained snapshot.
+/// Both approaches read the RepoView's *own* index (`endpoint_snapshot` and
+/// `endpoint_tags`, filled at create time), never the central tables, so the
+/// files describe this RepoView as the self-contained list it is.
 pub async fn generate_repoview_tables(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -263,23 +277,17 @@ pub async fn generate_repoview_tables(
         let name = name.clone();
         move || -> Result<serde_json::Value, String> {
             let membership = open_existing_membership(&state, ViewKind::Repoview, &name)?;
-            let member_ids = membership.list_ids().map_err(|e| format!("{e:?}"))?;
 
-            let mut members: Vec<MemberRow> = Vec::with_capacity(member_ids.len());
-            for eid in &member_ids {
-                if let Some(endpoint) = db::get_endpoint(&state.core, &state.queries, eid)
-                    .map_err(|e| format!("{e:?}"))?
-                {
-                    members.push(MemberRow {
-                        segment_path: segment_path(&endpoint.endpoint_str),
-                        endpoint_id: endpoint.endpoint_id,
-                        method: endpoint.method.unwrap_or_else(|| "UNCLASSIFIED".to_string()),
-                    });
-                }
-                // An id with no central endpoint row left (deleted out
-                // from under this RepoView's membership) is silently
-                // skipped - best-effort, matches the stats endpoint.
-            }
+            // Straight from the RepoView's own index - it describes itself,
+            // so these files don't depend on the central tables at all.
+            let mut members: Vec<MemberRow> = snapshot_endpoints(&membership)?
+                .into_iter()
+                .map(|(endpoint_id, endpoint_str, method)| MemberRow {
+                    segment_path: segment_path(&endpoint_str),
+                    endpoint_id,
+                    method,
+                })
+                .collect();
 
             let dir = repoview_dir(&state, &name);
             if !dir.is_dir() {
@@ -373,7 +381,7 @@ pub async fn generate_repoview_tables(
 
 /// True only for `Tables-meta.md` or `Tables-<digits>.md` - the exact names
 /// `generate` writes, and the only files the read routes will touch.
-fn is_table_file_name(name: &str) -> bool {
+pub(crate) fn is_table_file_name(name: &str) -> bool {
     if name == "Tables-meta.md" {
         return true;
     }
