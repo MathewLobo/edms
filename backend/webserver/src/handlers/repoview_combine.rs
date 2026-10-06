@@ -1,4 +1,4 @@
-//! Combine RepoViews - the list-level tag op from the v1.0 notes (Ravi,
+//! Combine RepoViews (and WebViews - `Flavor` says which) - the list-level tag op from the v1.0 notes (Ravi,
 //! 2026-10-05/06): "For both views, this operation simply combines data from
 //! two or more folders. Nothing comes from Collections."
 //!
@@ -7,10 +7,8 @@
 //! and no central table is read or written. Sources are chosen by name, by
 //! row tag ("every RepoView tagged release-1" - the tag op), or both.
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{extract::State, http::StatusCode, Extension, Json};
 use edms::ops::collection_membership_ops::CollectionMembershipOps;
-use edms::ops::repoview_tag_ops::RepoviewTagMembershipOps;
-use edms::ops::view_ops::ViewKind;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,10 +17,8 @@ use crate::{
     handlers::{
         repoview_index::{catalog_rows, decide, init_snapshot_tables, scalar, Decision},
         repoview_tables::{generate_tables_blocking, parse_approach_line, Approach},
-        view_catalog::{
-            open_catalog, open_existing_membership, open_membership, repoview_dir, repoview_file_path,
-            validate_repoview_name,
-        },
+        view_catalog::{open_catalog, open_existing_membership, open_membership},
+        view_flavor::Flavor,
     },
     state::AppState,
 };
@@ -249,10 +245,14 @@ impl From<String> for CombineError {
 ///
 /// The sources are never changed. The new RepoView's `source` lists the
 /// Collections its inputs came from, and its row tags are the union of theirs.
-pub async fn combine_repoviews(State(state): State<AppState>, Json(payload): Json<CombineRequest>) -> (StatusCode, Json<Value>) {
+pub async fn combine_repoviews(
+    State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
+    Json(payload): Json<CombineRequest>,
+) -> (StatusCode, Json<Value>) {
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
-        move || combine_blocking(&state, &payload)
+        move || combine_blocking(flavor, &state, &payload)
     })
     .await;
 
@@ -273,14 +273,14 @@ pub async fn combine_repoviews(State(state): State<AppState>, Json(payload): Jso
     }
 }
 
-fn combine_blocking(state: &AppState, req: &CombineRequest) -> Result<Value, CombineError> {
-    validate_repoview_name(&req.name)?;
+fn combine_blocking(flavor: Flavor, state: &AppState, req: &CombineRequest) -> Result<Value, CombineError> {
+    flavor.validate_name(&req.name)?;
     if req.sources.is_empty() && req.tags.is_empty() {
-        return Err(CombineError::Bad("give `sources` (RepoView names) and/or `tags` to pick them by".to_string()));
+        return Err(CombineError::Bad(format!("give `sources` ({} names) and/or `tags` to pick them by", flavor.label())));
     }
 
     let catalog = open_catalog(state)?;
-    let existing: BTreeSet<String> = catalog_rows(state, "REPOVIEW_LIST", &[])?
+    let existing: BTreeSet<String> = catalog_rows(state, &flavor.catalog_query("LIST"), &[])?
         .into_iter()
         .map(|row| row.0)
         .collect();
@@ -290,15 +290,14 @@ fn combine_blocking(state: &AppState, req: &CombineRequest) -> Result<Value, Com
     let mut picked: BTreeSet<String> = BTreeSet::new();
     let missing: Vec<&String> = req.sources.iter().filter(|s| !existing.contains(*s)).collect();
     if !missing.is_empty() {
-        return Err(CombineError::Bad(format!("RepoViews not found: {missing:?}")));
+        return Err(CombineError::Bad(format!("{}s not found: {missing:?}", flavor.label())));
     }
     picked.extend(req.sources.iter().cloned());
 
     // Sources picked by tag: only ones that still exist (a tag row can
     // outlive its RepoView in older data).
     if !req.tags.is_empty() {
-        let tag_ops = RepoviewTagMembershipOps::new(&state.db_path.display().to_string());
-        tag_ops.initialize().map_err(|e| format!("{e:?}"))?;
+        let tag_ops = flavor.row_tag_ops(state)?;
         for tag in &req.tags {
             for name in tag_ops.repoviews_by_tag(tag).map_err(|e| format!("{e:?}"))? {
                 if existing.contains(&name) {
@@ -312,16 +311,16 @@ fn combine_blocking(state: &AppState, req: &CombineRequest) -> Result<Value, Com
     let target_exists = existing.contains(&req.name);
     let (target_name, merging) = match decide(&req.name, target_exists, req.on_exists.as_deref(), req.new_name.as_deref()) {
         Decision::Conflict => {
-            return Err(CombineError::Conflict(format!("RepoView '{}' already exists", req.name)))
+            return Err(CombineError::Conflict(format!("{} '{}' already exists", flavor.label(), req.name)))
         }
         Decision::Invalid(why) => return Err(CombineError::Bad(why)),
         Decision::Merge(n) => (n, true),
         Decision::Create(n) => (n, false),
     };
     if !merging {
-        validate_repoview_name(&target_name)?;
+        flavor.validate_name(&target_name)?;
         if existing.contains(&target_name) {
-            return Err(CombineError::Conflict(format!("RepoView '{target_name}' already exists")));
+            return Err(CombineError::Conflict(format!("{} '{target_name}' already exists", flavor.label())));
         }
     }
 
@@ -329,11 +328,12 @@ fn combine_blocking(state: &AppState, req: &CombineRequest) -> Result<Value, Com
     picked.remove(&target_name);
     let sources: Vec<String> = picked.into_iter().collect();
     if merging && sources.is_empty() {
-        return Err(CombineError::Bad("nothing to merge into it: no other RepoView was picked".to_string()));
+        return Err(CombineError::Bad(format!("nothing to merge into it: no other {} was picked", flavor.label())));
     }
     if !merging && sources.len() < 2 {
         return Err(CombineError::Bad(format!(
-            "combining needs at least two RepoViews, but {} matched (use duplicate to copy one)",
+            "combining needs at least two {}s, but {} matched (use duplicate to copy one)",
+            flavor.label(),
             sources.len()
         )));
     }
@@ -342,31 +342,30 @@ fn combine_blocking(state: &AppState, req: &CombineRequest) -> Result<Value, Com
     let mut combined = IndexData::default();
     let mut origin: Vec<Option<String>> = Vec::new();
     let mut row_tags: BTreeSet<String> = BTreeSet::new();
-    let row_tag_ops = RepoviewTagMembershipOps::new(&state.db_path.display().to_string());
-    row_tag_ops.initialize().map_err(|e| format!("{e:?}"))?;
+    let row_tag_ops = flavor.row_tag_ops(state)?;
     for name in &sources {
-        let membership = open_existing_membership(state, ViewKind::Repoview, name)?;
+        let membership = open_existing_membership(state, flavor.kind(), name)?;
         combined.absorb(read_index(&membership)?);
-        origin.push(catalog_rows(state, "REPOVIEW_GET", &[name])?.into_iter().next().and_then(|row| row.4));
+        origin.push(catalog_rows(state, &flavor.catalog_query("GET"), &[name])?.into_iter().next().and_then(|row| row.4));
         row_tags.extend(row_tag_ops.list(name).map_err(|e| format!("{e:?}"))?);
     }
 
     let (members_added, had_tables) = if merging {
-        let target = open_existing_membership(state, ViewKind::Repoview, &target_name)?;
-        let dir = repoview_dir(state, &target_name);
+        let target = open_existing_membership(state, flavor.kind(), &target_name)?;
+        let dir = flavor.dir(state, &target_name);
         let had_tables = dir.join("Tables-meta.md").is_file();
         (write_index(&target, &combined)?, had_tables)
     } else {
-        let dir = repoview_dir(state, &target_name);
+        let dir = flavor.dir(state, &target_name);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let file_path = repoview_file_path(state, &target_name);
+        let file_path = flavor.file_path(state, &target_name);
         let created = (|| -> Result<usize, String> {
             let target = open_membership(&file_path)?;
             let added = write_index(&target, &combined)?;
             let query = state
                 .queries
-                .get_catalog_query("REPOVIEW_CREATE")
-                .ok_or_else(|| "query REPOVIEW_CREATE is missing".to_string())?;
+                .get_catalog_query(&flavor.catalog_query("CREATE"))
+                .ok_or_else(|| format!("query {} is missing", flavor.catalog_query("CREATE")))?;
             catalog
                 .core
                 .proc(query, &[&target_name, &file_path, &req.annotation, &combined_source(&origin)])
@@ -389,7 +388,7 @@ fn combine_blocking(state: &AppState, req: &CombineRequest) -> Result<Value, Com
     // had any) would silently go stale - rebuild them, same approach.
     let tables_regenerated = merging
         && had_tables
-        && std::fs::read_to_string(repoview_dir(state, &target_name).join("Tables-meta.md"))
+        && std::fs::read_to_string(flavor.dir(state, &target_name).join("Tables-meta.md"))
             .ok()
             .and_then(|meta| parse_approach_line(&meta))
             .and_then(|api_name| Approach::parse(Some(api_name)).ok())
@@ -397,7 +396,7 @@ fn combine_blocking(state: &AppState, req: &CombineRequest) -> Result<Value, Com
             .unwrap_or(false);
 
     let endpoints_total = {
-        let target = open_existing_membership(state, ViewKind::Repoview, &target_name)?;
+        let target = open_existing_membership(state, flavor.kind(), &target_name)?;
         scalar(&target, "SELECT COUNT(*) FROM membership")?
     };
 

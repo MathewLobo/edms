@@ -11,7 +11,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use edms::ops::collection_membership_ops::CollectionMembershipOps;
 use edms::ops::tag_ops::TagOps;
@@ -20,7 +20,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashSet;
 
-use crate::{db, state::AppState};
+use crate::{db, handlers::view_flavor::Flavor, state::AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterViewRequest {
@@ -62,30 +62,17 @@ pub(crate) fn open_membership(file_path: &str) -> Result<CollectionMembershipOps
 /// A RepoView gets its own directory, unlike a collection's single flat file:
 /// the SQLite index (`repoview.sqlite`) plus the generated `Tables-*.md`.
 /// No EQP data lives here (v1.0) - that is only copied at Import/Export.
+/// (WebView's is the same shape: `Flavor::dir`.)
 pub(crate) fn repoview_dir(state: &AppState, name: &str) -> std::path::PathBuf {
-    state.storage_root.join("storage").join("repoviews").join(name)
-}
-
-pub(crate) fn repoview_file_path(state: &AppState, name: &str) -> String {
-    repoview_dir(state, name).join("repoview.sqlite").display().to_string()
+    Flavor::Repo.dir(state, name)
 }
 
 /// A RepoView's name becomes a real folder name (`storage/repoviews/{name}`)
 /// and `delete` removes that whole folder, so it must never be able to point
-/// anywhere else: `..` would resolve to `storage/` itself. Also rejects what
-/// Windows hosts (this project's dev machines) can't use in a folder name.
-/// Applied wherever a name is *introduced* (create, rename, duplicate), and
-/// re-checked before `delete` touches the disk.
+/// anywhere else: `..` would resolve to `storage/` itself. See
+/// `Flavor::validate_name`, which this and the WebView equivalent share.
 pub(crate) fn validate_repoview_name(name: &str) -> Result<(), String> {
-    validate_folder_name(name, "RepoView name")?;
-    // Words that are fixed routes under /repoview/ (`/repoview/list`,
-    // `/repoview/import`, ...) - a RepoView with one of these names could
-    // never be fetched by name, because the fixed route would win.
-    const RESERVED: [&str; 7] = ["list", "create", "delete", "import", "combine", "tags", "by-tag"];
-    if RESERVED.iter().any(|word| name.eq_ignore_ascii_case(word)) {
-        return Err(format!("'{name}' is reserved (it's a fixed /repoview route) - pick another RepoView name"));
-    }
-    Ok(())
+    Flavor::Repo.validate_name(name)
 }
 
 /// The same rules for any name that becomes a file or folder name - used for
@@ -163,62 +150,6 @@ pub(crate) fn open_existing_collection_membership(
         .ok_or_else(|| format!("Collection '{name}' does not exist"))?;
     let path = row.1.ok_or_else(|| format!("Collection '{name}' has no file yet"))?;
     open_membership(&path)
-}
-
-async fn register_for(
-    kind: ViewKind,
-    state: AppState,
-    payload: RegisterViewRequest,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let res = tokio::task::spawn_blocking({
-        let state = state.clone();
-        move || -> Result<usize, String> {
-            let ops = open_catalog(&state)?;
-            ops.register(kind, &payload.name, None, payload.annotation.as_deref())
-                .map_err(|e| format!("{e:?}"))
-        }
-    })
-    .await;
-
-    match res {
-        Ok(Ok(inserted)) => {
-            state.refresh_dashboard_snapshot();
-            (StatusCode::OK, Json(json!({ "ok": true, "inserted": inserted })))
-        }
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "ok": false, "error": e.to_string() })),
-        ),
-    }
-}
-
-async fn list_for(kind: ViewKind, state: AppState) -> (StatusCode, Json<serde_json::Value>) {
-    let res = tokio::task::spawn_blocking({
-        let state = state.clone();
-        move || -> Result<Vec<(String, Option<String>, String, Option<String>)>, String> {
-            let ops = open_catalog(&state)?;
-            ops.list(kind).map_err(|e| format!("{e:?}"))
-        }
-    })
-    .await;
-
-    match res {
-        Ok(Ok(rows)) => (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "items": rows.into_iter().map(|(name, file_path, created_at, annotation)| json!({
-                    "name": name, "file_path": file_path, "created_at": created_at, "annotation": annotation
-                })).collect::<Vec<_>>()
-            })),
-        ),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "ok": false, "error": e.to_string() })),
-        ),
-    }
 }
 
 /// POST /collections/create — registers the catalog row AND creates the
@@ -596,18 +527,7 @@ pub async fn list_collections(State(state): State<AppState>) -> (StatusCode, Jso
     }
 }
 
-pub async fn create_webview_entry(
-    State(state): State<AppState>,
-    Json(payload): Json<RegisterViewRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    register_for(ViewKind::Webview, state, payload).await
-}
-
-pub async fn list_webviews(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
-    list_for(ViewKind::Webview, state).await
-}
-
-// ── RepoView ──────────────────────────────────────────────────────────
+// ── RepoView / WebView ───────────────────────────────────────────────────────────
 //
 // v1.0 (Ravi, 2026-10-05/06): a RepoView is a LIST - a SQLite index (members
 // plus a snapshot of their endpoint rows, tags and QP metadata) and the
@@ -633,6 +553,7 @@ pub struct CreateRepoviewRequest {
 /// RepoView's own SQLite. No EQP data is copied.
 pub async fn create_repoview_entry(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Json(payload): Json<CreateRepoviewRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let res = tokio::task::spawn_blocking({
@@ -642,14 +563,14 @@ pub async fn create_repoview_entry(
         let source_collection = payload.source_collection.clone();
         let requested_ids = payload.endpoint_ids.clone();
         move || -> Result<serde_json::Value, String> {
-            validate_repoview_name(&name)?;
+            flavor.validate_name(&name)?;
             let catalog = open_catalog(&state)?;
             if catalog
-                .get(ViewKind::Repoview, &name)
+                .get(flavor.kind(), &name)
                 .map_err(|e| format!("{e:?}"))?
                 .is_some()
             {
-                return Err(format!("RepoView '{name}' already exists"));
+                return Err(format!("{} \'{name}\' already exists", flavor.label()));
             }
 
             let source_membership =
@@ -671,10 +592,10 @@ pub async fn create_repoview_entry(
                 _ => source_members.into_iter().collect(),
             };
 
-            let dir = repoview_dir(&state, &name);
+            let dir = flavor.dir(&state, &name);
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
-            let file_path = repoview_file_path(&state, &name);
+            let file_path = flavor.file_path(&state, &name);
             let membership = open_membership(&file_path)?;
 
             let stats = crate::handlers::repoview_index::build_index(&state, &membership, &endpoint_ids)
@@ -687,7 +608,7 @@ pub async fn create_repoview_entry(
 
             let query = state
                 .queries
-                .get_catalog_query("REPOVIEW_CREATE")
+                .get_catalog_query(&flavor.catalog_query("CREATE"))
                 .ok_or(edms::error::EdmsError::UnknownError)
                 .map_err(|e| format!("{e:?}"))?;
             catalog
@@ -733,6 +654,7 @@ pub async fn create_repoview_entry(
 /// match.
 pub async fn rename_repoview_entry(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Path(name): Path<String>,
     Json(payload): Json<RenameViewRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
@@ -741,45 +663,46 @@ pub async fn rename_repoview_entry(
         let old_name = name.clone();
         let new_name = payload.new_name.clone();
         move || -> Result<usize, String> {
-            validate_repoview_name(&new_name)?;
+            flavor.validate_name(&new_name)?;
             let catalog = open_catalog(&state)?;
             if catalog
-                .get(ViewKind::Repoview, &old_name)
+                .get(flavor.kind(), &old_name)
                 .map_err(|e| format!("{e:?}"))?
                 .is_none()
             {
-                return Err(format!("RepoView '{old_name}' does not exist"));
+                return Err(format!("{} \'{old_name}\' does not exist", flavor.label()));
             }
             if catalog
-                .get(ViewKind::Repoview, &new_name)
+                .get(flavor.kind(), &new_name)
                 .map_err(|e| format!("{e:?}"))?
                 .is_some()
             {
-                return Err(format!("RepoView '{new_name}' already exists"));
+                return Err(format!("{} \'{new_name}\' already exists", flavor.label()));
             }
 
-            let old_dir = repoview_dir(&state, &old_name);
-            let new_dir = repoview_dir(&state, &new_name);
-            let new_path = repoview_file_path(&state, &new_name);
+            let old_dir = flavor.dir(&state, &old_name);
+            let new_dir = flavor.dir(&state, &new_name);
+            let new_path = flavor.file_path(&state, &new_name);
 
             let rows = catalog
-                .rename(ViewKind::Repoview, &old_name, &new_name, Some(&new_path))
+                .rename(flavor.kind(), &old_name, &new_name, Some(&new_path))
                 .map_err(|e| {
                     if db::is_unique_violation(&e) {
-                        format!("RepoView '{new_name}' already exists")
+                        format!("{} \'{new_name}\' already exists", flavor.label())
                     } else {
                         format!("{e:?}")
                     }
                 })?;
 
             if let Err(e) = std::fs::rename(&old_dir, &new_dir) {
-                let old_path = repoview_file_path(&state, &old_name);
-                let _ = catalog.rename(ViewKind::Repoview, &new_name, &old_name, Some(&old_path));
-                return Err(format!("failed to rename RepoView folder, rolled back: {e}"));
+                let old_path = flavor.file_path(&state, &old_name);
+                let _ = catalog.rename(flavor.kind(), &new_name, &old_name, Some(&old_path));
+                return Err(format!("failed to rename {} folder, rolled back: {e}", flavor.label()));
             }
             // Carry its row-level tags to the new name (they're keyed by name).
+            let (tag_table, name_col) = flavor.tag_table();
             let _ = catalog.core.proc(
-                "UPDATE repoview_tag_memberships SET repoview_name = ? WHERE repoview_name = ?",
+                &format!("UPDATE {tag_table} SET {name_col} = ? WHERE {name_col} = ?"),
                 &[&new_name, &old_name],
             );
 
@@ -806,6 +729,7 @@ pub async fn rename_repoview_entry(
 /// doesn't change here.
 pub async fn annotate_repoview_entry(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Path(name): Path<String>,
     Json(payload): Json<AnnotateViewRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
@@ -816,14 +740,14 @@ pub async fn annotate_repoview_entry(
         move || -> Result<usize, String> {
             let catalog = open_catalog(&state)?;
             if catalog
-                .get(ViewKind::Repoview, &name)
+                .get(flavor.kind(), &name)
                 .map_err(|e| format!("{e:?}"))?
                 .is_none()
             {
-                return Err(format!("RepoView '{name}' does not exist"));
+                return Err(format!("{} \'{name}\' does not exist", flavor.label()));
             }
             catalog
-                .annotate(ViewKind::Repoview, &name, &annotation)
+                .annotate(flavor.kind(), &name, &annotation)
                 .map_err(|e| format!("{e:?}"))
         }
     })
@@ -840,33 +764,34 @@ pub async fn annotate_repoview_entry(
 }
 
 /// POST /repoview/:name/delete — removes the catalog row and deletes the
-/// whole RepoView directory (membership file + copied data) from disk.
+/// whole view directory from disk.
 /// Shared by the single-name route below and the bulk-delete route — one
 /// place that defines "delete this one RepoView's catalog row + folder."
-fn delete_repoview_sync(state: &AppState, name: &str) -> Result<(usize, bool), String> {
+fn delete_view_sync(flavor: Flavor, state: &AppState, name: &str) -> Result<(usize, bool), String> {
     let catalog = open_catalog(state)?;
     if catalog
-        .get(ViewKind::Repoview, name)
+        .get(flavor.kind(), name)
         .map_err(|e| format!("{e:?}"))?
         .is_none()
     {
-        return Err(format!("RepoView '{name}' does not exist"));
+        return Err(format!("{} \'{name}\' does not exist", flavor.label()));
     }
 
     let deleted_rows = catalog
-        .remove(ViewKind::Repoview, name)
+        .remove(flavor.kind(), name)
         .map_err(|e| format!("{e:?}"))?;
     // Its row-level tags live in a central table keyed by name; leave them
     // and `GET /repoview/by-tag/:tag` keeps returning a RepoView that's gone.
-    let _ = catalog.core.proc("DELETE FROM repoview_tag_memberships WHERE repoview_name = ?", &[&name]);
+    let (tag_table, name_col) = flavor.tag_table();
+    let _ = catalog.core.proc(&format!("DELETE FROM {tag_table} WHERE {name_col} = ?"), &[&name]);
 
     // Re-check the name before touching the disk: `remove_dir_all` on a path
     // built from an unvalidated name is the most destructive call in here. A
     // row with an unsafe name (shouldn't exist, but) still gets its catalog
     // entry removed; its folder is left alone.
-    let dir = repoview_dir(state, name);
+    let dir = flavor.dir(&state, name);
     let mut dir_deleted = false;
-    if validate_repoview_name(name).is_ok() && dir.is_dir() {
+    if flavor.validate_name(name).is_ok() && dir.is_dir() {
         std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
         dir_deleted = true;
     }
@@ -876,12 +801,13 @@ fn delete_repoview_sync(state: &AppState, name: &str) -> Result<(usize, bool), S
 
 pub async fn delete_repoview_entry(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Path(name): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
         let name = name.clone();
-        move || delete_repoview_sync(&state, &name)
+        move || delete_view_sync(flavor, &state, &name)
     })
     .await;
 
@@ -913,6 +839,7 @@ pub struct NamesRequest {
 /// ViewTagCountOps::delete_many.
 pub async fn delete_repoviews_bulk(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Json(payload): Json<NamesRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let names = payload.names;
@@ -921,7 +848,7 @@ pub async fn delete_repoviews_bulk(
         move || -> Vec<serde_json::Value> {
             names
                 .into_iter()
-                .map(|name| match delete_repoview_sync(&state, &name) {
+                .map(|name| match delete_view_sync(flavor, &state, &name) {
                     Ok((deleted_rows, dir_deleted)) => json!({
                         "name": name, "ok": true,
                         "deleted_rows": deleted_rows, "dir_deleted": dir_deleted
@@ -960,6 +887,7 @@ pub async fn delete_repoviews_bulk(
 /// the data, so they come along with the clone same as annotation does.
 pub async fn duplicate_repoview_entry(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Path(name): Path<String>,
     Json(payload): Json<RenameViewRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
@@ -969,10 +897,10 @@ pub async fn duplicate_repoview_entry(
         let old_name = name.clone();
         let new_name = new_name.clone();
         move || -> Result<serde_json::Value, String> {
-            validate_repoview_name(&new_name)?;
+            flavor.validate_name(&new_name)?;
             let query = state
                 .queries
-                .get_catalog_query("REPOVIEW_GET")
+                .get_catalog_query(&flavor.catalog_query("GET"))
                 .ok_or(edms::error::EdmsError::UnknownError)
                 .map_err(|e| format!("{e:?}"))?;
             let catalog = open_catalog(&state)?;
@@ -987,28 +915,28 @@ pub async fn duplicate_repoview_entry(
                     .next();
 
             let Some((_, _, _, annotation, source)) = row else {
-                return Err(format!("RepoView '{old_name}' does not exist"));
+                return Err(format!("{} \'{old_name}\' does not exist", flavor.label()));
             };
 
             if catalog
-                .get(ViewKind::Repoview, &new_name)
+                .get(flavor.kind(), &new_name)
                 .map_err(|e| format!("{e:?}"))?
                 .is_some()
             {
-                return Err(format!("RepoView '{new_name}' already exists"));
+                return Err(format!("{} \'{new_name}\' already exists", flavor.label()));
             }
 
-            let old_dir = repoview_dir(&state, &old_name);
-            let new_dir = repoview_dir(&state, &new_name);
+            let old_dir = flavor.dir(&state, &old_name);
+            let new_dir = flavor.dir(&state, &new_name);
             if !old_dir.is_dir() {
-                return Err(format!("RepoView '{old_name}' has no folder yet"));
+                return Err(format!("{} \'{old_name}\' has no folder yet", flavor.label()));
             }
             copy_dir_recursive(&old_dir, &new_dir).map_err(|e| e.to_string())?;
 
-            let new_file_path = repoview_file_path(&state, &new_name);
+            let new_file_path = flavor.file_path(&state, &new_name);
             let create_query = state
                 .queries
-                .get_catalog_query("REPOVIEW_CREATE")
+                .get_catalog_query(&flavor.catalog_query("CREATE"))
                 .ok_or(edms::error::EdmsError::UnknownError)
                 .map_err(|e| format!("{e:?}"))?;
             if let Err(e) = catalog
@@ -1023,9 +951,11 @@ pub async fn duplicate_repoview_entry(
 
             // Copy row-level membership-tags across too — same table used
             // by add_repoview_tag/list_repoview_tags_for_name.
+            let (tag_table, name_col) = flavor.tag_table();
             let _ = catalog.core.proc(
-                "INSERT OR IGNORE INTO repoview_tag_memberships (repoview_name, tagname) \
-                 SELECT ?, tagname FROM repoview_tag_memberships WHERE repoview_name = ?",
+                &format!(
+                    "INSERT OR IGNORE INTO {tag_table} ({name_col}, tagname)                      SELECT ?, tagname FROM {tag_table} WHERE {name_col} = ?"
+                ),
                 &[&new_name, &old_name],
             );
 

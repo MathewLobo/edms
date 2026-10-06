@@ -310,15 +310,47 @@ Content-Type: application/json
 ### List collections tags with their counts
 GET {{baseUrl}}/collections/tags/list
 
-### --- Same four "tags" routes + catalog create/list, scoped to webview ---
+### --- WebView: the same list model as RepoView (v1.0), under /webview ---
+# Every /repoview/... route below has a /webview/... twin with the same body
+# and behaviour (create, list, :name, rename, annotation, delete, duplicate,
+# convert-to-collection, combine, takeout, import, membership-tags, by-tag).
+# A WebView has no tables routes; it has a front page instead.
 
+### Create a WebView from a Collection (source_collection is required now)
 POST {{baseUrl}}/webview/create
 Content-Type: application/json
 
-{ "name": "wtest" }
+{ "name": "wtest", "source_collection": "content-api" }
 
-### List registered webviews
+### List WebViews
 GET {{baseUrl}}/webview/list
+
+### Modify Frontpage: load (exists:false until one is saved)
+GET {{baseUrl}}/webview/wtest/front-page
+
+### Modify Frontpage: save (any JSON object; replaces the previous one)
+POST {{baseUrl}}/webview/wtest/front-page
+Content-Type: application/json
+
+{ "front_page": { "title": "Content API docs", "sections": [] } }
+
+### Combine two WebViews
+POST {{baseUrl}}/webview/combine
+Content-Type: application/json
+
+{ "name": "wall", "sources": ["wtest", "wtest2"] }
+
+### Takeout (front-page.json goes with it) and import it back
+POST {{baseUrl}}/webview/wtest/takeout
+Content-Type: application/json
+
+{}
+
+### Import reads storage/imports/uncompressed/webview/{folder}/
+POST {{baseUrl}}/webview/import
+Content-Type: application/json
+
+{ "folder": "wtest", "name": "wtest-imported" }
 
 ### Create a webview tag, or add to its count if it already exists
 POST {{baseUrl}}/webview/tags/create

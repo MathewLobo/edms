@@ -1,4 +1,6 @@
-//! A RepoView's own SQLite index - v1.0 (Ravi, 2026-10-05/06).
+//! A RepoView's (and, the same way, a WebView's) own SQLite index - v1.0
+//! (Ravi, 2026-10-05/06). The route handlers here serve both: `Flavor` says
+//! which.
 //!
 //! A RepoView is a list, not a copy of the data: `repoview.sqlite` holds the
 //! members, a snapshot of each member's endpoint row (URL, method,
@@ -13,7 +15,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use edms::ops::collection_membership_ops::CollectionMembershipOps;
 use edms::ops::repoview_tag_ops::RepoviewTagMembershipOps;
@@ -28,9 +30,10 @@ use crate::{
     db,
     handlers::{
         repoview_tables::{is_table_file_name, path_segments},
+        view_flavor::Flavor,
         view_catalog::{
             collection_file_path, open_catalog, open_existing_membership, open_membership,
-            repoview_dir, validate_folder_name,
+            validate_folder_name,
         },
     },
     state::AppState,
@@ -316,14 +319,14 @@ impl RepoviewRow {
 
 type CatalogRow = (String, Option<String>, String, Option<String>, Option<String>);
 
-fn load_row(state: &AppState, tag_ops: &RepoviewTagMembershipOps, row: CatalogRow) -> RepoviewRow {
+fn load_row(flavor: Flavor, state: &AppState, tag_ops: &RepoviewTagMembershipOps, row: CatalogRow) -> RepoviewRow {
     let (name, file_path, created_at, annotation, source) = row;
     let tags = tag_ops.list(&name).unwrap_or_default();
 
     let (stats, error) = match &file_path {
         None => (RepoviewStats::default(), None),
         Some(path) => match open_membership(path)
-            .and_then(|m| compute_stats(&m, &repoview_dir(state, &name)))
+            .and_then(|m| compute_stats(&m, &flavor.dir(state, &name)))
         {
             Ok(stats) => (stats, None),
             Err(e) => (RepoviewStats::default(), Some(e)),
@@ -344,21 +347,15 @@ pub(crate) fn catalog_rows(state: &AppState, key: &str, params: &[&dyn rusqlite:
         .map_err(|e| format!("{e:?}"))
 }
 
-fn tag_ops(state: &AppState) -> Result<RepoviewTagMembershipOps, String> {
-    let ops = RepoviewTagMembershipOps::new(&state.db_path.display().to_string());
-    ops.initialize().map_err(|e| format!("{e:?}"))?;
-    Ok(ops)
-}
-
-/// GET /repoview/list - every RepoView with all the columns the UI table
+/// GET /{repoview,webview}/list - every view with all the columns the UI table
 /// shows, in one call (no per-row follow-up requests).
-pub async fn list_repoviews(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+pub async fn list_repoviews(State(state): State<AppState>, Extension(flavor): Extension<Flavor>) -> (StatusCode, Json<Value>) {
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
         move || -> Result<Vec<Value>, String> {
-            let rows = catalog_rows(&state, "REPOVIEW_LIST", &[])?;
-            let tags = tag_ops(&state)?;
-            Ok(rows.into_iter().map(|row| load_row(&state, &tags, row).list_json()).collect())
+            let rows = catalog_rows(&state, &flavor.catalog_query("LIST"), &[])?;
+            let tags = flavor.row_tag_ops(&state)?;
+            Ok(rows.into_iter().map(|row| load_row(flavor, &state, &tags, row).list_json()).collect())
         }
     })
     .await;
@@ -376,15 +373,16 @@ pub async fn list_repoviews(State(state): State<AppState>) -> (StatusCode, Json<
 /// GET /repoview/:name - one RepoView, same data as a list row.
 pub async fn get_repoview_entry(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Path(name): Path<String>,
 ) -> (StatusCode, Json<Value>) {
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
         let name = name.clone();
         move || -> Result<Option<Value>, String> {
-            let rows = catalog_rows(&state, "REPOVIEW_GET", &[&name])?;
-            let tags = tag_ops(&state)?;
-            Ok(rows.into_iter().next().map(|row| load_row(&state, &tags, row).detail_json()))
+            let rows = catalog_rows(&state, &flavor.catalog_query("GET"), &[&name])?;
+            let tags = flavor.row_tag_ops(&state)?;
+            Ok(rows.into_iter().next().map(|row| load_row(flavor, &state, &tags, row).detail_json()))
         }
     })
     .await;
@@ -393,7 +391,7 @@ pub async fn get_repoview_entry(
         Ok(Ok(Some(body))) => (StatusCode::OK, Json(body)),
         Ok(Ok(None)) => (
             StatusCode::NOT_FOUND,
-            Json(json!({ "ok": false, "error": format!("RepoView '{name}' does not exist") })),
+            Json(json!({ "ok": false, "error": flavor.not_found(&name) })),
         ),
         Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
         Err(e) => (
@@ -473,6 +471,7 @@ impl From<String> for ConvertError {
 /// method as when listed) are added; the rest are reported in `skipped`.
 pub async fn convert_repoview_to_collection(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Path(name): Path<String>,
     Json(payload): Json<ConvertRequest>,
 ) -> (StatusCode, Json<Value>) {
@@ -480,8 +479,8 @@ pub async fn convert_repoview_to_collection(
         let state = state.clone();
         let name = name.clone();
         move || -> Result<Value, ConvertError> {
-            let membership = open_existing_membership(&state, ViewKind::Repoview, &name)
-                .map_err(|_| ConvertError::Bad(format!("RepoView '{name}' does not exist")))?;
+            let membership = open_existing_membership(&state, flavor.kind(), &name)
+                .map_err(|_| ConvertError::Bad(flavor.not_found(&name)))?;
             init_snapshot_tables(&membership)?;
 
             validate_folder_name(&payload.collection, "Collection name")?;
@@ -558,8 +557,10 @@ pub async fn convert_repoview_to_collection(
             }
             if usable.is_empty() {
                 return Err(ConvertError::Bad(
-                    "none of this RepoView's endpoints exist in the central tables, so there is nothing to convert"
-                        .to_string(),
+                    format!(
+                        "none of this {}'s endpoints exist in the central tables, so there is nothing to convert",
+                        flavor.label()
+                    ),
                 ));
             }
 

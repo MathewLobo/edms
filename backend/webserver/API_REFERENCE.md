@@ -189,16 +189,34 @@ A different table from Collections' tag rollups above — tracks tags directly o
 
 ## Webview
 
-Same catalog pattern as Collections (register a name, list, per-view tag rollups) but **not** as far along — no independent SQLite file per instance yet (`file_path` stays `null`), and no endpoint-membership routes (no `webview/:name/endpoints/add` equivalent exists).
+**v1.0 (Ravi, 2026-10-05/06): a WebView is the same list as a RepoView** ("UI is 99% identical for both"), so it has the same routes with `/webview` in place of `/repoview` and the same behaviour - see the Repoview section for what each one does. Its folder (`storage/webviews/:name/`) holds the SQLite index (`webview.sqlite`) and `front-page.json`, and no EQP data; row-level tags live in `webview_tag_memberships`, and `webview.source` records the Collection it was built from. The backend serves both from the same handlers (`handlers/view_flavor.rs`), so a fix to one is a fix to both, and a RepoView and a WebView with the same name don't interfere.
 
-| Method | Path | Body |
-|---|---|---|
-| POST | `/webview/create` | `{"name"}` |
-| GET | `/webview/list` | — |
-| POST | `/webview/tags/create` | `{"name","endpoint_ids"?}` |
-| POST | `/webview/tags/delete` | `{"names"}` |
-| POST | `/webview/tags/rename` | `{"old_name","new_name"}` |
-| GET | `/webview/tags/list` | — |
+| Method | Path | Body | Notes |
+|---|---|---|---|
+| POST | `/webview/create` | `{"name","annotation"?,"source_collection","endpoint_ids"?}` | Builds the list from a Collection, exactly like `/repoview/create`. **Changed in v1.0:** it used to register an empty catalog row from `{"name"}` alone; `source_collection` is now required |
+| GET | `/webview/list` | - | Same row shape as `/repoview/list` (camelCase UI fields plus the snake_case ones) |
+| GET | `/webview/:name` | - | One WebView, same data as a list row |
+| POST | `/webview/:name/rename` | `{"new_name"}` | Moves the folder (so `front-page.json` comes along) and carries its row tags |
+| POST | `/webview/:name/annotation` | `{"annotation"}` | |
+| POST | `/webview/:name/delete` | - | Removes the folder and its row tags |
+| POST | `/webview/delete` | `{"names"}` | Bulk delete, one result per name |
+| POST | `/webview/:name/duplicate` | `{"new_name"}` | Copies the folder (including `front-page.json`) and row tags |
+| POST | `/webview/:name/convert-to-collection` | `{"collection","on_exists"?,"new_name"?}` | Same merge/rename 409 flow as RepoView |
+| POST | `/webview/combine` | `{"name","sources"?,"tags"?,"annotation"?,"on_exists"?,"new_name"?}` | Combines WebViews (never mixes in RepoViews: a RepoView name is "not found" here). Same rules as `/repoview/combine` |
+| POST | `/webview/:name/takeout` | `{"dest_name"?,"overwrite"?}` | Same as RepoView takeout; the takeout folder also holds `front-page.json` and the SQLite index is stripped (which is what compute's `validate_webview_format` requires: JSON only, no SQLite). Its manifest says `"kind":"webview"` |
+| POST | `/webview/import` | `{"folder","name"?}` | Reads `storage/imports/uncompressed/webview/{folder}/` (compute's folder for it). Fresh EIDs, same as RepoView import, and `front-page.json` is restored (`front_page_restored`). A takeout of the other kind is refused (400, naming the right route) |
+| POST | `/webview/:name/membership-tags/add` | `{"tag"}` | Row-level tags |
+| POST | `/webview/:name/membership-tags/remove` | `{"tag"}` | |
+| GET | `/webview/:name/membership-tags` | - | |
+| GET | `/webview/by-tag/:tagname` | - | `{"webviews":[...]}` |
+| GET | `/webview/:name/front-page` | - | **Modify Frontpage** (the pop-up's load): `{ok, name, exists, front_page}`; `exists:false` and `front_page:null` until one is saved. 404 if the WebView doesn't exist |
+| POST | `/webview/:name/front-page` | `{"front_page":{...}}` | **Modify Frontpage** (save): replaces `front-page.json`. The notes don't define its fields, so it is stored as an opaque JSON object (400 if it isn't an object or is over 1 MB) and returned as is |
+| POST | `/webview/tags/create` | `{"name","endpoint_ids"?}` | Central tag-count rollup |
+| POST | `/webview/tags/delete` | `{"names"}` | |
+| POST | `/webview/tags/rename` | `{"old_name","new_name"}` | |
+| GET | `/webview/tags/list` | - | |
+
+A WebView has **no `tables` routes** (those generate a RepoView's `Tables-*.md`; a WebView's folder holds `front-page.json` instead). Reserved names are the same as RepoView's (`list`, `create`, `delete`, `import`, `combine`, `tags`, `by-tag`).
 
 ---
 
@@ -236,7 +254,7 @@ The UI shows statistics per row (endpoint count, QP count, method counts, tags i
 
 **Removed in v1.0** (they shipped briefly in the first RepoView release; nothing in the frontend called them): `GET /repoview/:name/endpoints`, `POST .../endpoints/add`, `POST .../endpoints/remove`, `POST .../tags/import`, `GET .../tags/endpoints`, and `POST .../export-to-collection` (replaced by `convert-to-collection`).
 
-**Not built yet:** moving RepoView operations into Compute with live-update events, and the same treatment for WebView. Also not wired: the generic Import/Export *table* (list what's in `storage/imports`, format-check it, move it into a view) - `compute::table_view` already has `scan_imports_table`, `check_item_format` and `move_item_to_view`, but no webserver route calls them; `takeout` and `import` above are the RepoView-specific halves.
+**Not built yet:** moving RepoView and WebView operations into Compute with live-update events. Also not wired: the generic Import/Export *table* (list what's in `storage/imports`, format-check it, move it into a view) - `compute::table_view` already has `scan_imports_table`, `check_item_format` and `move_item_to_view`, but no webserver route calls them; `takeout` and `import` above are the RepoView-specific halves.
 
 ---
 
@@ -288,7 +306,7 @@ The UI shows statistics per row (endpoint count, QP count, method counts, tags i
 - Deleting an endpoint now cascades its bookmarks correctly (2026-09-22), but **not** collection memberships or history/request/response data — those can still be left behind, orphaned, referencing a dead endpoint.
 - A QP (request/response pair — see Test View above) is generated automatically by every test run, not created/edited by hand. There's no route to edit a QP's saved request/response in place, only to list and delete.
 - Import (`/repo/:collection/:filename/import`) only extracts a zip to disk — it does not create/update endpoint, bookmark, or collection-membership DB rows from the imported files.
-- Webview still has no independent per-instance SQLite file (unlike Collections and now Repoview) and no endpoint-membership routes at all.
+- WebView's "WebView specific formatted data" (v1.0 notes, next to `front-page.json`) isn't defined anywhere I could find, so it isn't built; `front-page.json`'s own fields are likewise unspecified and stored as an opaque JSON object. A WebView takeout reuses the RepoView manifest file name (`repoview-manifest.json`, with `"kind":"webview"`).
 - A RepoView is a point-in-time list: it doesn't follow its source Collection or the central tables afterwards (an endpoint renamed or deleted centrally keeps its old row in the index), and the generated `Tables-*.md` are a snapshot until `tables/generate` is called again. Its `source` is the Collection it was created from.
 - A RepoView's name, annotation, source and row tags still live in the central database's `repoview*` tables, not in its folder, so a RepoView folder carried to a brand-new instance can't be re-registered yet. Import/Export (not built) is the intended way across instances.
 - RepoViews created before 2026-10-04 have no endpoint snapshot in their index, so their stats and Tables files come out empty; re-create them. Ones created between 2026-10-04 and v1.0 still have a leftover `globalEQPData/` folder inside, which is now ignored (it is removed with the RepoView).

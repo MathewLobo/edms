@@ -1,4 +1,6 @@
-//! Import / Export ("takeout") for RepoViews - v1.0 (Ravi, 2026-10-05/06).
+//! Import / Export ("takeout") for RepoViews - v1.0 (Ravi, 2026-10-05/06) -
+//! and, the same way, WebViews (`Flavor` says which; a WebView's folder also
+//! holds `front-page.json`, which travels with it).
 //!
 //! A RepoView is only a list, so this is the one place its EQP data is
 //! touched:
@@ -21,12 +23,10 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use edms::ops::collection_membership_ops::CollectionMembershipOps;
-use edms::ops::repoview_tag_ops::RepoviewTagMembershipOps;
 use edms::ops::tag_ops::TagOps;
-use edms::ops::view_ops::ViewKind;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -37,14 +37,13 @@ use crate::{
     handlers::{
         repoview_index::{build_index, catalog_rows, init_snapshot_tables},
         repoview_tables::{generate_tables_blocking, parse_approach_line, Approach},
-        view_catalog::{
-            open_catalog, open_existing_membership, open_membership, repoview_dir, repoview_file_path,
-            validate_folder_name, validate_repoview_name,
-        },
+        view_catalog::{open_catalog, open_existing_membership, open_membership, validate_folder_name},
+        view_flavor::Flavor,
     },
     state::AppState,
 };
 
+pub(crate) const FRONT_PAGE_FILE: &str = "front-page.json";
 pub(crate) const MANIFEST_FILE: &str = "repoview-manifest.json";
 const MANIFEST_FORMAT: &str = "edms-repoview";
 const MANIFEST_VERSION: u32 = 1;
@@ -67,6 +66,14 @@ pub(crate) struct ManifestRepoview {
     pub source: Option<String>,
     pub tags: Vec<String>,
     pub created_at: String,
+    /// `"repoview"` or `"webview"`. Takeouts made before WebView existed
+    /// have no such field, and are RepoViews.
+    #[serde(default = "default_kind")]
+    pub kind: String,
+}
+
+fn default_kind() -> String {
+    "repoview".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -227,8 +234,13 @@ fn takeout_root(state: &AppState) -> PathBuf {
     state.storage_root.join("storage")
 }
 
-fn imports_dir(state: &AppState) -> PathBuf {
-    state.storage_root.join("storage").join("imports").join("uncompressed").join("repo")
+fn imports_dir(flavor: Flavor, state: &AppState) -> PathBuf {
+    state
+        .storage_root
+        .join("storage")
+        .join("imports")
+        .join("uncompressed")
+        .join(flavor.import_folder())
 }
 
 // ── Takeout (export) ─────────────────────────────────────────────────────
@@ -281,39 +293,36 @@ fn respond(state: &AppState, res: Result<Result<Value, IeError>, tokio::task::Jo
 /// ["overwrite", "rename"]` and nothing changes.
 pub async fn takeout_repoview(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Path(name): Path<String>,
     Json(payload): Json<TakeoutRequest>,
 ) -> (StatusCode, Json<Value>) {
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
         let name = name.clone();
-        move || takeout_blocking(&state, &name, payload.dest_name.as_deref(), payload.overwrite)
+        move || takeout_blocking(flavor, &state, &name, payload.dest_name.as_deref(), payload.overwrite)
     })
     .await;
     respond(&state, res)
 }
 
-fn takeout_blocking(state: &AppState, name: &str, dest_name: Option<&str>, overwrite: bool) -> Result<Value, IeError> {
-    validate_repoview_name(name)?;
+fn takeout_blocking(flavor: Flavor, state: &AppState, name: &str, dest_name: Option<&str>, overwrite: bool) -> Result<Value, IeError> {
+    flavor.validate_name(name)?;
     let dest_name = dest_name.map(str::trim).filter(|d| !d.is_empty()).unwrap_or(name);
     validate_folder_name(dest_name, "Takeout name")?;
 
-    let membership = open_existing_membership(state, ViewKind::Repoview, name)
-        .map_err(|_| IeError::Bad(format!("RepoView '{name}' does not exist")))?;
-    let dir = repoview_dir(state, name);
+    let membership = open_existing_membership(state, flavor.kind(), name)
+        .map_err(|_| IeError::Bad(flavor.not_found(name)))?;
+    let dir = flavor.dir(state, name);
     if !dir.is_dir() {
-        return Err(IeError::Bad(format!("RepoView '{name}' has no folder yet")));
+        return Err(IeError::Bad(format!("{} '{name}' has no folder yet", flavor.label())));
     }
 
-    let row = catalog_rows(state, "REPOVIEW_GET", &[&name])?
+    let row = catalog_rows(state, &flavor.catalog_query("GET"), &[&name])?
         .into_iter()
         .next()
-        .ok_or_else(|| IeError::Bad(format!("RepoView '{name}' does not exist")))?;
-    let row_tags = {
-        let ops = RepoviewTagMembershipOps::new(&state.db_path.display().to_string());
-        ops.initialize().map_err(|e| format!("{e:?}"))?;
-        ops.list(name).map_err(|e| format!("{e:?}"))?
-    };
+        .ok_or_else(|| IeError::Bad(flavor.not_found(name)))?;
+    let row_tags = flavor.row_tag_ops(state)?.list(name).map_err(|e| format!("{e:?}"))?;
     let manifest = build_manifest(
         &membership,
         ManifestRepoview {
@@ -322,6 +331,7 @@ fn takeout_blocking(state: &AppState, name: &str, dest_name: Option<&str>, overw
             source: row.4,
             tags: row_tags,
             created_at: row.2,
+            kind: flavor.route().to_string(),
         },
     )?;
 
@@ -399,11 +409,12 @@ pub struct ImportRequest {
 /// imported are reported in `skipped`; if none can, nothing is created.
 pub async fn import_repoview(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Json(payload): Json<ImportRequest>,
 ) -> (StatusCode, Json<Value>) {
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
-        move || import_blocking(&state, &payload.folder, payload.name.as_deref())
+        move || import_blocking(flavor, &state, &payload.folder, payload.name.as_deref())
     })
     .await;
     respond(&state, res)
@@ -417,12 +428,13 @@ fn rollback_endpoint(state: &AppState, new_eid: &str) {
     let _ = state.eid_allocator.release(new_eid);
 }
 
-fn import_blocking(state: &AppState, folder: &str, name_override: Option<&str>) -> Result<Value, IeError> {
+fn import_blocking(flavor: Flavor, state: &AppState, folder: &str, name_override: Option<&str>) -> Result<Value, IeError> {
     validate_folder_name(folder, "Folder name")?;
-    let src = imports_dir(state).join(folder);
+    let src = imports_dir(flavor, state).join(folder);
     if !src.is_dir() {
         return Err(IeError::Bad(format!(
-            "'{folder}' was not found under storage/imports/uncompressed/repo/"
+            "'{folder}' was not found under storage/imports/uncompressed/{}/",
+            flavor.import_folder()
         )));
     }
 
@@ -431,17 +443,25 @@ fn import_blocking(state: &AppState, folder: &str, name_override: Option<&str>) 
     let manifest: Manifest = serde_json::from_str(&manifest_text)
         .map_err(|e| IeError::Bad(format!("{MANIFEST_FILE} in '{folder}' is not valid: {e}")))?;
     validate_manifest(&manifest)?;
+    if manifest.repoview.kind != flavor.route() {
+        return Err(IeError::Bad(format!(
+            "'{folder}' is a {} takeout, not a {} - import it through /{}/import",
+            manifest.repoview.kind,
+            flavor.route(),
+            manifest.repoview.kind
+        )));
+    }
 
     let name = name_override
         .map(str::trim)
         .filter(|n| !n.is_empty())
         .unwrap_or(&manifest.repoview.name)
         .to_string();
-    validate_repoview_name(&name)?;
+    flavor.validate_name(&name)?;
     let catalog = open_catalog(state)?;
-    if catalog.get(ViewKind::Repoview, &name).map_err(|e| format!("{e:?}"))?.is_some() {
+    if catalog.get(flavor.kind(), &name).map_err(|e| format!("{e:?}"))?.is_some() {
         return Err(IeError::Conflict {
-            message: format!("RepoView '{name}' already exists"),
+            message: format!("{} '{name}' already exists", flavor.label()),
             options: vec!["rename"],
         });
     }
@@ -541,16 +561,16 @@ fn import_blocking(state: &AppState, folder: &str, name_override: Option<&str>) 
     // Build the RepoView's index from what was just written - the same code
     // Create uses, so an imported RepoView is indistinguishable from a
     // created one.
-    let dir = repoview_dir(state, &name);
+    let dir = flavor.dir(state, &name);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let file_path = repoview_file_path(state, &name);
+    let file_path = flavor.file_path(state, &name);
     let created = (|| -> Result<(), String> {
         let membership = open_membership(&file_path)?;
         build_index(state, &membership, &new_eids)?;
         let query = state
             .queries
-            .get_catalog_query("REPOVIEW_CREATE")
-            .ok_or_else(|| "query REPOVIEW_CREATE is missing".to_string())?;
+            .get_catalog_query(&flavor.catalog_query("CREATE"))
+            .ok_or_else(|| format!("query {} is missing", flavor.catalog_query("CREATE")))?;
         catalog
             .core
             .proc(
@@ -558,8 +578,7 @@ fn import_blocking(state: &AppState, folder: &str, name_override: Option<&str>) 
                 &[&name, &file_path, &manifest.repoview.annotation, &manifest.repoview.source],
             )
             .map_err(|e| format!("{e:?}"))?;
-        let row_tags = RepoviewTagMembershipOps::new(&state.db_path.display().to_string());
-        row_tags.initialize().map_err(|e| format!("{e:?}"))?;
+        let row_tags = flavor.row_tag_ops(state)?;
         for tag in &manifest.repoview.tags {
             let _ = row_tags.add(&name, tag);
         }
@@ -568,13 +587,24 @@ fn import_blocking(state: &AppState, folder: &str, name_override: Option<&str>) 
     if let Err(e) = created {
         let _ = std::fs::remove_dir_all(&dir);
         return Err(IeError::Bad(format!(
-            "the endpoints were imported but the RepoView couldn't be created: {e}"
+            "the endpoints were imported but the {} couldn't be created: {e}",
+            flavor.label()
         )));
     }
 
+    // A WebView's front page comes back with it (it names no EIDs, so it is
+    // copied as is - but only if it really is JSON).
+    let front_page_restored = flavor == Flavor::Web
+        && std::fs::read_to_string(src.join(FRONT_PAGE_FILE))
+            .ok()
+            .filter(|text| serde_json::from_str::<Value>(text).is_ok())
+            .map(|text| std::fs::write(dir.join(FRONT_PAGE_FILE), text).is_ok())
+            .unwrap_or(false);
+
     // The takeout's Tables name EIDs that no longer exist here, so rebuild
     // them (same approach) rather than copying stale files.
-    let tables_regenerated = std::fs::read_to_string(src.join("Tables-meta.md"))
+    let tables_regenerated = flavor.has_tables()
+        && std::fs::read_to_string(src.join("Tables-meta.md"))
         .ok()
         .and_then(|meta| parse_approach_line(&meta))
         .and_then(|api_name| Approach::parse(Some(api_name)).ok())
@@ -587,7 +617,8 @@ fn import_blocking(state: &AppState, folder: &str, name_override: Option<&str>) 
         "endpoints_imported": new_eids.len(),
         "mapping": mapping,
         "skipped": skipped,
-        "tables_regenerated": tables_regenerated
+        "tables_regenerated": tables_regenerated,
+        "front_page_restored": front_page_restored
     }))
 }
 
@@ -613,6 +644,7 @@ mod tests {
                 source: Some("src".into()),
                 tags: vec!["production".into()],
                 created_at: "2026-10-06 10:00:00".into(),
+                kind: "repoview".into(),
             },
             endpoints: vec![ManifestEndpoint {
                 eid: "E0001-AAA".into(),
