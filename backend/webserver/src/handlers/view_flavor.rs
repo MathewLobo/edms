@@ -47,8 +47,8 @@ impl Flavor {
     /// `storage/{this}/{name}/`
     pub fn storage_folder(self) -> &'static str {
         match self {
-            Flavor::Repo => "repoviews",
-            Flavor::Web => "webviews",
+            Flavor::Repo => "repoview",
+            Flavor::Web => "webview",
         }
     }
 

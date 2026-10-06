@@ -67,7 +67,7 @@ pub(crate) fn repoview_dir(state: &AppState, name: &str) -> std::path::PathBuf {
     Flavor::Repo.dir(state, name)
 }
 
-/// A RepoView's name becomes a real folder name (`storage/repoviews/{name}`)
+/// A RepoView's name becomes a real folder name (`storage/repoview/{name}`)
 /// and `delete` removes that whole folder, so it must never be able to point
 /// anywhere else: `..` would resolve to `storage/` itself. See
 /// `Flavor::validate_name`, which this and the WebView equivalent share.
