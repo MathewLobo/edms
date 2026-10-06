@@ -75,7 +75,7 @@ pub(crate) fn init_snapshot_tables(membership: &CollectionMembershipOps) -> Resu
     Ok(())
 }
 
-fn scalar(membership: &CollectionMembershipOps, sql: &str) -> Result<i64, String> {
+pub(crate) fn scalar(membership: &CollectionMembershipOps, sql: &str) -> Result<i64, String> {
     let rows: Vec<i64> = membership
         .core
         .cproc(sql, &[], |r| r.get::<_, i64>(0))
@@ -424,7 +424,7 @@ pub struct ConvertRequest {
 }
 
 #[derive(Debug, PartialEq)]
-enum Decision {
+pub(crate) enum Decision {
     Create(String),
     Merge(String),
     Conflict,
@@ -433,7 +433,7 @@ enum Decision {
 
 /// Pure decision logic for the pop-up's choices, kept separate so it's
 /// testable without a server.
-fn decide(collection: &str, exists: bool, on_exists: Option<&str>, new_name: Option<&str>) -> Decision {
+pub(crate) fn decide(collection: &str, exists: bool, on_exists: Option<&str>, new_name: Option<&str>) -> Decision {
     if !exists {
         return Decision::Create(collection.to_string());
     }

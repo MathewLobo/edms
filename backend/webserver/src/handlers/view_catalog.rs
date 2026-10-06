@@ -81,7 +81,7 @@ pub(crate) fn validate_repoview_name(name: &str) -> Result<(), String> {
     // Words that are fixed routes under /repoview/ (`/repoview/list`,
     // `/repoview/import`, ...) - a RepoView with one of these names could
     // never be fetched by name, because the fixed route would win.
-    const RESERVED: [&str; 6] = ["list", "create", "delete", "import", "tags", "by-tag"];
+    const RESERVED: [&str; 7] = ["list", "create", "delete", "import", "combine", "tags", "by-tag"];
     if RESERVED.iter().any(|word| name.eq_ignore_ascii_case(word)) {
         return Err(format!("'{name}' is reserved (it's a fixed /repoview route) - pick another RepoView name"));
     }
@@ -777,6 +777,11 @@ pub async fn rename_repoview_entry(
                 let _ = catalog.rename(ViewKind::Repoview, &new_name, &old_name, Some(&old_path));
                 return Err(format!("failed to rename RepoView folder, rolled back: {e}"));
             }
+            // Carry its row-level tags to the new name (they're keyed by name).
+            let _ = catalog.core.proc(
+                "UPDATE repoview_tag_memberships SET repoview_name = ? WHERE repoview_name = ?",
+                &[&new_name, &old_name],
+            );
 
             Ok(rows)
         }
@@ -851,6 +856,9 @@ fn delete_repoview_sync(state: &AppState, name: &str) -> Result<(usize, bool), S
     let deleted_rows = catalog
         .remove(ViewKind::Repoview, name)
         .map_err(|e| format!("{e:?}"))?;
+    // Its row-level tags live in a central table keyed by name; leave them
+    // and `GET /repoview/by-tag/:tag` keeps returning a RepoView that's gone.
+    let _ = catalog.core.proc("DELETE FROM repoview_tag_memberships WHERE repoview_name = ?", &[&name]);
 
     // Re-check the name before touching the disk: `remove_dir_all` on a path
     // built from an unvalidated name is the most destructive call in here. A
@@ -1176,7 +1184,7 @@ mod tests {
 
     #[test]
     fn rejects_names_that_would_be_shadowed_by_a_fixed_route() {
-        for word in ["list", "create", "delete", "import", "tags", "by-tag", "LIST", "Import"] {
+        for word in ["list", "create", "delete", "import", "combine", "tags", "by-tag", "LIST", "Import"] {
             assert!(validate_repoview_name(word).is_err(), "{word} is a route word");
         }
         // only whole words are reserved

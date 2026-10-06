@@ -451,6 +451,35 @@ Content-Type: application/json
 
 { "folder": "rtest-for-git", "name": "rtest-imported" }
 
+### --- Combine ---
+# Merges the indexes of two or more RepoViews (nothing comes from Collections,
+# no EQP data is touched). Pick inputs by name, by row tag, or both.
+
+### Combine two RepoViews into a new one. 409 {conflict, options:["merge","rename"]}
+# if "all-views" already exists.
+POST {{baseUrl}}/repoview/combine
+Content-Type: application/json
+
+{ "name": "all-views", "sources": ["rtest-a", "rtest-b"], "annotation": "a + b" }
+
+### Combine every RepoView carrying a row tag
+POST {{baseUrl}}/repoview/combine
+Content-Type: application/json
+
+{ "name": "release-1", "tags": ["rel1"] }
+
+### Merge more RepoViews into the existing one (its own rows are kept)
+POST {{baseUrl}}/repoview/combine
+Content-Type: application/json
+
+{ "name": "all-views", "sources": ["rtest-c"], "on_exists": "merge" }
+
+### ...or keep "all-views" as is and write the result under another name
+POST {{baseUrl}}/repoview/combine
+Content-Type: application/json
+
+{ "name": "all-views", "sources": ["rtest-a", "rtest-c"], "on_exists": "rename", "new_name": "all-views-2" }
+
 ### --- Tags on the RepoView itself (the list-level tag ops) ---
 # Separate from dataTags, the tags of the endpoints inside it.
 
