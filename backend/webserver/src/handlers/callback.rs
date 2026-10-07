@@ -25,6 +25,9 @@ pub async fn ipc_callback(
         if let Some(ref err) = callback.error {
             error!("[callback] task='{}' failed: {}", callback.task, err);
         }
+        // A job's child reports its failure here: fail the job too.
+        crate::handlers::repoview_ie::abort_import(&state, &callback);
+        crate::handlers::jobs::fail_from_callback(&state, &callback);
         let _ = state.events_tx.send(ServerEvent::Error {
             message: format!(
                 "IPC task '{}' failed: {}",
@@ -44,6 +47,11 @@ pub async fn ipc_callback(
         "export_merge"             => handle_export_merge(&state, &callback).await,
         "mark_active_folder"       => handle_mark_active_folder(&state, &callback).await,
         "compute_crud_operations"  => handle_compute_crud_operations(&state, &callback).await,
+        "view_io_progress"         => crate::handlers::jobs::progress_from_callback(&state, &callback),
+        "view_takeout"             => crate::handlers::jobs::complete_from_callback(&state, &callback),
+        "view_import_copy"         => crate::handlers::repoview_ie::finish_import(&state, &callback).await,
+        "view_table_check"         => crate::handlers::jobs::complete_from_callback(&state, &callback),
+        "view_unzip"               => crate::handlers::repoview_ie::continue_after_unzip(&state, &callback).await,
         "convert_to_pdf" | "convert_to_html" | "convert_to_markdown" => {
             handle_file_conversion(&state, &callback).await
         }

@@ -452,9 +452,13 @@ Content-Type: application/json
 # storage/takeout/{dest_name}/ with the SQLite index stripped (git/web
 # friendly), plus Tables-*.md and repoview-manifest.json (the endpoints'
 # URL/method/tags/QP status codes, which an EQP folder doesn't hold).
+#
+# Takeout and import are JOBS: they return 202 {job_id} at once and
+# edms-child does the copying. Watch GET /jobs/:id, or the WebSocket
+# GET /jobs/ws (ViewIoProgress while it runs, ViewIoDone when it finishes).
 
-### Take a RepoView out. 409 {conflict, options:["overwrite","rename"]} if
-# a takeout of that name already exists.
+### Take a RepoView out -> 202 {job_id}. 409 {conflict, options:["overwrite","rename"]}
+# straight away if a takeout of that name already exists.
 POST {{baseUrl}}/repoview/rtest-renamed/takeout
 Content-Type: application/json
 
@@ -466,12 +470,19 @@ Content-Type: application/json
 
 { "dest_name": "rtest-for-git", "overwrite": true }
 
+### Ask how a job is doing: status running | done | failed | stalled, progress, result
+# (put the job_id from the 202 here)
+GET {{baseUrl}}/jobs/job-0000000000000-1
+
+### Recent jobs
+GET {{baseUrl}}/jobs
+
 ### Import: put the takeout folder (e.g. from git) in
 # storage/imports/uncompressed/repo/ and name it here. Every endpoint gets a
 # FRESH EID (the same URL may already exist under another one), its EQP files
 # are renamed to match, and the RepoView's index and Tables are rebuilt.
 # 409 {conflict, options:["rename"]} if the RepoView name is taken - retry
-# with "name".
+# with "name". The result (mapping, skipped, ...) is in the job.
 POST {{baseUrl}}/repoview/import
 Content-Type: application/json
 
@@ -483,34 +494,23 @@ Content-Type: application/json
 
 { "folder": "rtest-for-git", "name": "rtest-imported" }
 
-### --- Combine ---
-# Merges the indexes of two or more RepoViews (nothing comes from Collections,
-# no EQP data is touched). Pick inputs by name, by row tag, or both.
-
-### Combine two RepoViews into a new one. 409 {conflict, options:["merge","rename"]}
-# if "all-views" already exists.
-POST {{baseUrl}}/repoview/combine
+### Import a zipped takeout from storage/imports/compressed/repo/
+# It is unzipped first (strictly: any unsafe entry refuses the whole zip) into
+# uncompressed/repo/rtest-for-git/. 409 {options:["replace"]} if that folder is
+# already there - send "replace_extracted": true to replace it.
+POST {{baseUrl}}/repoview/import
 Content-Type: application/json
 
-{ "name": "all-views", "sources": ["rtest-a", "rtest-b"], "annotation": "a + b" }
+{ "zip": "rtest-for-git.zip", "name": "rtest-from-zip" }
 
-### Combine every RepoView carrying a row tag
-POST {{baseUrl}}/repoview/combine
+### The Import/Export table: what is in storage/imports/ (scanned live)
+GET {{baseUrl}}/import-export/table
+
+### Format-check a row (a job): use the row's "section" and "path"
+POST {{baseUrl}}/import-export/check
 Content-Type: application/json
 
-{ "name": "release-1", "tags": ["rel1"] }
-
-### Merge more RepoViews into the existing one (its own rows are kept)
-POST {{baseUrl}}/repoview/combine
-Content-Type: application/json
-
-{ "name": "all-views", "sources": ["rtest-c"], "on_exists": "merge" }
-
-### ...or keep "all-views" as is and write the result under another name
-POST {{baseUrl}}/repoview/combine
-Content-Type: application/json
-
-{ "name": "all-views", "sources": ["rtest-a", "rtest-c"], "on_exists": "rename", "new_name": "all-views-2" }
+{ "section": "compressed", "path": "repo/rtest-for-git.zip" }
 
 ### --- Tags on the RepoView itself (the list-level tag ops) ---
 # Separate from dataTags, the tags of the endpoints inside it.

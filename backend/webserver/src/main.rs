@@ -6,6 +6,7 @@ mod events;
 mod handlers;
 mod ipc;
 mod logging;
+mod jobs;
 mod state;
 mod timer;
 
@@ -63,6 +64,8 @@ use handlers::{
     repoview_tag_memberships::{
         add_repoview_tag, list_repoview_tags_for_name, remove_repoview_tag, repoviews_by_tag,
     },
+    import_export::{import_export_check, import_export_table},
+    jobs::{get_job, list_jobs, ws_jobs},
     repoview_combine::combine_repoviews,
     view_flavor::Flavor,
     webview_front_page::{get_front_page, save_front_page},
@@ -367,6 +370,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/repo/:collection/:filename/export", get(export_collection))
         .route("/repo/:collection/:filename/import", post(import_collection))
         .route("/reports/:endpoint_id/export", post(export_eqp_report))
+        .route("/import-export/table", get(import_export_table))
+        .route("/import-export/check", post(import_export_check))
+        .route("/jobs", get(list_jobs))
+        .route("/jobs/ws", get(ws_jobs))
+        .route("/jobs/:id", get(get_job))
         .route("/internal/callback", post(ipc_callback))
         .route("/logs", get(get_logs))
         .layer(CorsLayer::permissive())

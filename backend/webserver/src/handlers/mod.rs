@@ -12,6 +12,8 @@ pub mod report_export;
 pub mod tags;
 pub mod test_view;
 pub mod view;
+pub mod import_export;
+pub mod jobs;
 pub mod view_catalog;
 pub mod view_flavor;
 pub mod view_tags;

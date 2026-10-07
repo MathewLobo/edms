@@ -34,6 +34,9 @@ pub struct AppState {
     /// fire a second, uncoordinated TestTimeout on its own schedule.
     pub active_timers: Arc<Mutex<HashMap<(String, i32), TimerHandle>>>,
     pub eid_allocator: Arc<compute::eid::allocator::EidAllocator>,
+    /// Long-running Import/Export work started by a request and finished by
+    /// an `edms-child` callback (see `jobs.rs`).
+    pub jobs: crate::jobs::JobTable,
 }
 
 impl AppState {
@@ -64,6 +67,7 @@ impl AppState {
             config,
             active_timers: Arc::new(Mutex::new(HashMap::new())),
             eid_allocator,
+            jobs: crate::jobs::JobTable::new(),
         }
     }
 

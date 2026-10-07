@@ -28,12 +28,14 @@ use axum::{
 use edms::ops::collection_membership_ops::CollectionMembershipOps;
 use edms::ops::tag_ops::TagOps;
 use serde::{Deserialize, Serialize};
+use compute::view_io::EqpEntry;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::path::{Path as FsPath, PathBuf};
+use std::path::PathBuf;
 
 use crate::{
     db,
+    ipc::IpcCallback,
     handlers::{
         repoview_index::{build_index, catalog_rows, init_snapshot_tables},
         repoview_tables::{generate_tables_blocking, parse_approach_line, Approach},
@@ -202,34 +204,6 @@ pub(crate) fn validate_manifest(m: &Manifest) -> Result<(), String> {
 
 // ── EID-aware file copying ───────────────────────────────────────────────
 
-/// `E0001-AAA-request-1.json` -> `E0042-AAA-request-1.json` when the file
-/// belongs to `old`; any other name is returned unchanged.
-pub(crate) fn rename_eid_file(file_name: &str, old: &str, new: &str) -> String {
-    match file_name.strip_prefix(old) {
-        Some(rest) if rest.starts_with('-') => format!("{new}{rest}"),
-        _ => file_name.to_string(),
-    }
-}
-
-/// Copies the regular files of one EQP folder (they're flat) into `dst`,
-/// renaming those that carry the old EID. Subfolders and symlinks are skipped
-/// on purpose - a takeout may come from git, so only plain files are trusted.
-/// Returns how many files were copied.
-pub(crate) fn copy_eqp_dir(src: &FsPath, dst: &FsPath, old: &str, new: &str) -> std::io::Result<usize> {
-    std::fs::create_dir_all(dst)?;
-    let mut copied = 0;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        std::fs::copy(entry.path(), dst.join(rename_eid_file(&name, old, new)))?;
-        copied += 1;
-    }
-    Ok(copied)
-}
-
 fn takeout_root(state: &AppState) -> PathBuf {
     state.storage_root.join("storage")
 }
@@ -266,11 +240,15 @@ impl From<String> for IeError {
     }
 }
 
-fn respond(state: &AppState, res: Result<Result<Value, IeError>, tokio::task::JoinError>) -> (StatusCode, Json<Value>) {
+fn respond(
+    state: &AppState,
+    ok_status: StatusCode,
+    res: Result<Result<Value, IeError>, tokio::task::JoinError>,
+) -> (StatusCode, Json<Value>) {
     match res {
         Ok(Ok(body)) => {
             state.refresh_dashboard_snapshot();
-            (StatusCode::OK, Json(body))
+            (ok_status, Json(body))
         }
         Ok(Err(IeError::Conflict { message, options })) => (
             StatusCode::CONFLICT,
@@ -303,7 +281,7 @@ pub async fn takeout_repoview(
         move || takeout_blocking(flavor, &state, &name, payload.dest_name.as_deref(), payload.overwrite)
     })
     .await;
-    respond(&state, res)
+    respond(&state, StatusCode::ACCEPTED, res)
 }
 
 fn takeout_blocking(flavor: Flavor, state: &AppState, name: &str, dest_name: Option<&str>, overwrite: bool) -> Result<Value, IeError> {
@@ -335,54 +313,54 @@ fn takeout_blocking(flavor: Flavor, state: &AppState, name: &str, dest_name: Opt
         },
     )?;
 
-    // The RepoView folder (Tables files; the SQLite is stripped) goes through
-    // the existing takeout - it also owns the name-collision check.
-    let result = compute::table_view::takeout_item(&dir, dest_name, &takeout_root(state), overwrite)
-        .map_err(|e| IeError::Bad(e.to_string()))?;
-    if result.collision {
+    // Collisions are answered now (an immediate 409), not by the job later.
+    let dest_dir = takeout_root(state).join("takeout").join(dest_name);
+    if dest_dir.exists() && !overwrite {
         return Err(IeError::Conflict {
             message: format!("A takeout named '{dest_name}' already exists"),
             options: vec!["overwrite", "rename"],
         });
     }
-    let dest = PathBuf::from(&result.destination);
 
-    // A RepoView made before v1.0 may carry its own old copy of the data;
-    // the takeout gets a fresh one from globalEQPData instead.
-    let eqp_root = dest.join(EQP_DIR);
-    if eqp_root.exists() {
-        std::fs::remove_dir_all(&eqp_root).map_err(|e| e.to_string())?;
-    }
-    std::fs::create_dir_all(&eqp_root).map_err(|e| e.to_string())?;
-
-    let mut copied_dirs = 0usize;
-    let mut files = 0usize;
-    let mut missing: Vec<String> = Vec::new();
-    for endpoint in &manifest.endpoints {
-        let src = state.endpoint_storage_dir(&endpoint.eid);
-        if src.is_dir() {
-            files += copy_eqp_dir(&src, &eqp_root.join(&endpoint.eid), &endpoint.eid, &endpoint.eid)
-                .map_err(|e| format!("failed to copy the data for {}: {e}", endpoint.eid))?;
-            copied_dirs += 1;
-        } else if !endpoint.qps.is_empty() {
-            // An endpoint with no saved QPs has no EQP folder, and that's
-            // normal; only one that *should* have data but doesn't is a gap.
-            missing.push(endpoint.eid.clone());
+    // The copying itself - the view folder with its index stripped, every
+    // endpoint's EQP data, the manifest - runs in edms-child. The request
+    // returns now; the result arrives as a `ViewIoDone` event (and on
+    // `GET /jobs/:id`).
+    let endpoints: Vec<EqpEntry> = manifest
+        .endpoints
+        .iter()
+        .map(|e| EqpEntry { eid: e.eid.clone(), has_qps: !e.qps.is_empty() })
+        .collect();
+    let job_id = state.jobs.create("takeout", Some(flavor.route()), Some(name));
+    let started = crate::ipc::spawn_child(
+        "view_takeout",
+        json!({
+            "job_id": job_id,
+            "view_dir": dir,
+            "dest_name": dest_name,
+            "storage_dir": takeout_root(state),
+            "overwrite": overwrite,
+            "eqp_root": state.storage_root.join("storage").join("globalEQPData"),
+            "endpoints": endpoints,
+            "manifest": manifest,
+            "manifest_file": MANIFEST_FILE,
+        }),
+        3000,
+    );
+    if !started {
+        let error = "couldn't start the compute process (is edms-child built?)".to_string();
+        if let Some(job) = state.jobs.fail(&job_id, error.clone()) {
+            crate::handlers::jobs::emit_done(state, &job);
         }
+        return Err(IeError::Bad(error));
     }
-
-    let json_text = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
-    std::fs::write(dest.join(MANIFEST_FILE), json_text).map_err(|e| e.to_string())?;
 
     Ok(json!({
-        "ok": missing.is_empty(),
-        "destination": result.destination,
-        "endpoints": manifest.endpoints.len(),
-        "eqp_folders_copied": copied_dirs,
-        "eqp_files_copied": files,
-        "index_files_stripped": result.sqlite_files_stripped,
-        "missing_eqp_data": missing,
-        "manifest": MANIFEST_FILE
+        "ok": true,
+        "status": "running",
+        "job_id": job_id,
+        "destination": dest_dir,
+        "endpoints": manifest.endpoints.len()
     }))
 }
 
@@ -390,9 +368,19 @@ fn takeout_blocking(flavor: Flavor, state: &AppState, name: &str, dest_name: Opt
 
 #[derive(Debug, Deserialize)]
 pub struct ImportRequest {
-    /// Folder name under `storage/imports/uncompressed/repo/` - a takeout
-    /// copied back from git (or straight from `storage/takeout/`).
-    pub folder: String,
+    /// Folder name under `storage/imports/uncompressed/repo/` (or `/webview/`)
+    /// - a takeout copied back from git (or straight from `storage/takeout/`).
+    /// Give this or `zip`.
+    #[serde(default)]
+    pub folder: Option<String>,
+    /// A zipped takeout in `storage/imports/compressed/repo/` (or
+    /// `/webview/`): unzipped to `uncompressed/{name without .zip}/` first,
+    /// then imported as above.
+    #[serde(default)]
+    pub zip: Option<String>,
+    /// With `zip`: replace that unzipped folder if it is already there.
+    #[serde(default)]
+    pub replace_extracted: bool,
     /// Name for the new RepoView. Defaults to the name in the manifest.
     #[serde(default)]
     pub name: Option<String>,
@@ -405,8 +393,16 @@ pub struct ImportRequest {
 /// under another one), its EQP files are copied into globalEQPData under the
 /// new name, its central rows and tags are written, and the RepoView's index
 /// is built from them. If the RepoView name is taken: **409** with
-/// `options: ["rename"]` - retry with `name`. Endpoints that can't be
-/// imported are reported in `skipped`; if none can, nothing is created.
+/// `options: ["rename"]` - retry with `name`.
+///
+/// It runs as a job in three parts, so the request returns at once:
+/// 1. here: validate, check the name, allocate the new EIDs, start the child
+///    -> `202 {job_id}`;
+/// 2. `edms-child` (`view_import_copy`): copy and rename the EQP files;
+/// 3. `finish_import`, when the child calls back: write the central rows,
+///    build the index and catalog row, then finish the job (`ViewIoDone`).
+/// Endpoints that can't be imported are reported in the result's `skipped`;
+/// if none can, nothing is created.
 pub async fn import_repoview(
     State(state): State<AppState>,
     Extension(flavor): Extension<Flavor>,
@@ -414,10 +410,35 @@ pub async fn import_repoview(
 ) -> (StatusCode, Json<Value>) {
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
-        move || import_blocking(flavor, &state, &payload.folder, payload.name.as_deref())
+        move || match (payload.folder.as_deref(), payload.zip.as_deref()) {
+            (Some(folder), None) => import_blocking(flavor, &state, folder, payload.name.as_deref(), None),
+            (None, Some(zip)) => import_zip_blocking(flavor, &state, zip, payload.name.as_deref(), payload.replace_extracted),
+            _ => Err(IeError::Bad("give exactly one of `folder` (an unzipped takeout) or `zip` (a zipped one)".to_string())),
+        }
     })
     .await;
-    respond(&state, res)
+    respond(&state, StatusCode::ACCEPTED, res)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanItem {
+    old: String,
+    new: String,
+}
+
+/// What part 3 needs, kept in the job while the child copies.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ImportContext {
+    flavor: String,
+    name: String,
+    src: String,
+    manifest: Manifest,
+    plan: Vec<PlanItem>,
+    skipped: Vec<Value>,
+}
+
+fn flavor_from_route(route: &str) -> Option<Flavor> {
+    [Flavor::Repo, Flavor::Web].into_iter().find(|f| f.route() == route)
 }
 
 /// Undoes one endpoint's partial import so a failure never leaves a
@@ -428,7 +449,22 @@ fn rollback_endpoint(state: &AppState, new_eid: &str) {
     let _ = state.eid_allocator.release(new_eid);
 }
 
-fn import_blocking(flavor: Flavor, state: &AppState, folder: &str, name_override: Option<&str>) -> Result<Value, IeError> {
+/// Gives back an EID that never became an endpoint: its files (if any were
+/// copied) and the allocation.
+fn release_eid(state: &AppState, new_eid: &str) {
+    let _ = std::fs::remove_dir_all(state.endpoint_storage_dir(new_eid));
+    let _ = state.eid_allocator.release(new_eid);
+}
+
+/// Part 1.
+fn import_blocking(
+    flavor: Flavor,
+    state: &AppState,
+    folder: &str,
+    name_override: Option<&str>,
+    // A zip import has a job already (it started with the unzip).
+    existing_job: Option<&str>,
+) -> Result<Value, IeError> {
     validate_folder_name(folder, "Folder name")?;
     let src = imports_dir(flavor, state).join(folder);
     if !src.is_dir() {
@@ -466,31 +502,287 @@ fn import_blocking(flavor: Flavor, state: &AppState, folder: &str, name_override
         });
     }
 
-    let tag_ops = TagOps::new(&state.db_path.display().to_string());
-    tag_ops.initialize().map_err(|e| format!("{e:?}"))?;
-    let insert_request = state
-        .queries
-        .get_request_query("R1")
-        .ok_or_else(|| "query R1 is missing".to_string())?;
-    let insert_response = state
-        .queries
-        .get_response_query("RES1")
-        .ok_or_else(|| "query RES1 is missing".to_string())?;
-
-    let mut mapping: Vec<Value> = Vec::new();
-    let mut new_eids: Vec<String> = Vec::new();
+    // Every endpoint gets a fresh EID, allocated now so the child can name
+    // the copied files. The central rows wait until the files are in place.
+    let mut plan: Vec<PlanItem> = Vec::new();
     let mut skipped: Vec<Value> = Vec::new();
-
     for endpoint in &manifest.endpoints {
         let skip = |why: String| json!({ "eid": endpoint.eid, "reason": why });
+        match state.eid_allocator.allocate() {
+            Ok(new) => match db::get_endpoint(&state.core, &state.queries, &new) {
+                Ok(None) => plan.push(PlanItem { old: endpoint.eid.clone(), new }),
+                // The allocator and the table disagree: leave that endpoint
+                // (and its EID) alone rather than write over it.
+                Ok(Some(_)) => skipped.push(skip(format!("the new EID {new} is already in use"))),
+                Err(e) => {
+                    let _ = state.eid_allocator.release(&new);
+                    skipped.push(skip(format!("couldn't check the new EID: {e:?}")));
+                }
+            },
+            Err(e) => skipped.push(skip(format!("couldn't allocate a new EID: {e:?}"))),
+        }
+    }
+    if plan.is_empty() {
+        return Err(IeError::Bad("none of the endpoints in this takeout could be imported".to_string()));
+    }
 
-        let new_eid = match state.eid_allocator.allocate() {
-            Ok(e) => e,
-            Err(e) => {
-                skipped.push(skip(format!("couldn't allocate a new EID: {e:?}")));
+    let job_id = match existing_job {
+        Some(id) => id.to_string(),
+        None => state.jobs.create("import", Some(flavor.route()), Some(&name)),
+    };
+    let context = ImportContext {
+        flavor: flavor.route().to_string(),
+        name: name.clone(),
+        src: src.display().to_string(),
+        manifest: manifest.clone(),
+        plan: plan.clone(),
+        skipped: skipped.clone(),
+    };
+    state.jobs.set_context(&job_id, serde_json::to_value(&context).map_err(|e| e.to_string())?);
+
+    let started = crate::ipc::spawn_child(
+        "view_import_copy",
+        json!({
+            "job_id": job_id,
+            "src_dir": src,
+            "eqp_root": state.storage_root.join("storage").join("globalEQPData"),
+            "items": plan.iter().map(|p| json!({ "old_eid": p.old, "new_eid": p.new })).collect::<Vec<_>>(),
+        }),
+        3000,
+    );
+    if !started {
+        for item in &plan {
+            release_eid(state, &item.new);
+        }
+        state.jobs.take_context(&job_id);
+        let error = "couldn't start the compute process (is edms-child built?)".to_string();
+        if let Some(job) = state.jobs.fail(&job_id, error.clone()) {
+            crate::handlers::jobs::emit_done(state, &job);
+        }
+        return Err(IeError::Bad(error));
+    }
+
+    Ok(json!({
+        "ok": true,
+        "status": "running",
+        "job_id": job_id,
+        "name": name,
+        "endpoints": plan.len(),
+        "skipped": skipped
+    }))
+}
+
+/// What a zip import keeps while the child unzips.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UnzipContext {
+    kind: String,
+    flavor: String,
+    folder: String,
+    name: Option<String>,
+}
+
+/// `import` with a `zip`: the same job, with an unzip in front. The child
+/// unzips into `storage/imports/uncompressed/{repo|webview}/{zip stem}/`
+/// (strictly - see `compute::view_io::run_unzip`), then `continue_after_unzip`
+/// carries on exactly like an import of that folder.
+fn import_zip_blocking(
+    flavor: Flavor,
+    state: &AppState,
+    zip: &str,
+    name_override: Option<&str>,
+    replace: bool,
+) -> Result<Value, IeError> {
+    validate_folder_name(zip, "Zip name")?;
+    let Some(stem) = zip.strip_suffix(".zip").or_else(|| zip.strip_suffix(".ZIP")) else {
+        return Err(IeError::Bad(format!("'{zip}' is not a .zip file")));
+    };
+    validate_folder_name(stem, "Zip name")?;
+    let zip_path = state
+        .storage_root
+        .join("storage")
+        .join("imports")
+        .join("compressed")
+        .join(flavor.import_folder())
+        .join(zip);
+    if !zip_path.is_file() {
+        return Err(IeError::Bad(format!(
+            "'{zip}' was not found under storage/imports/compressed/{}/",
+            flavor.import_folder()
+        )));
+    }
+
+    let dest = imports_dir(flavor, state).join(stem);
+    if dest.exists() && !replace {
+        return Err(IeError::Conflict {
+            message: format!("'{stem}' is already unzipped under storage/imports/uncompressed/{}/", flavor.import_folder()),
+            options: vec!["replace"],
+        });
+    }
+    // A name given up front can be checked now; one taken from the manifest
+    // can only be checked once the zip is open.
+    if let Some(name) = name_override.map(str::trim).filter(|n| !n.is_empty()) {
+        flavor.validate_name(name)?;
+        if open_catalog(state)?.get(flavor.kind(), name).map_err(|e| format!("{e:?}"))?.is_some() {
+            return Err(IeError::Conflict {
+                message: format!("{} '{name}' already exists", flavor.label()),
+                options: vec!["rename"],
+            });
+        }
+    }
+
+    let job_id = state.jobs.create("import", Some(flavor.route()), Some(stem));
+    let context = UnzipContext {
+        kind: "unzip".to_string(),
+        flavor: flavor.route().to_string(),
+        folder: stem.to_string(),
+        name: name_override.map(str::trim).filter(|n| !n.is_empty()).map(str::to_string),
+    };
+    state.jobs.set_context(&job_id, serde_json::to_value(&context).map_err(|e| e.to_string())?);
+    let started = crate::ipc::spawn_child(
+        "view_unzip",
+        json!({
+            "job_id": job_id,
+            "zip_path": zip_path,
+            "dest_dir": dest,
+            "replace": replace,
+            "manifest_file": MANIFEST_FILE,
+        }),
+        3000,
+    );
+    if !started {
+        state.jobs.take_context(&job_id);
+        let error = "couldn't start the compute process (is edms-child built?)".to_string();
+        if let Some(job) = state.jobs.fail(&job_id, error.clone()) {
+            crate::handlers::jobs::emit_done(state, &job);
+        }
+        return Err(IeError::Bad(error));
+    }
+
+    Ok(json!({ "ok": true, "status": "running", "job_id": job_id, "step": "unzipping", "folder": stem }))
+}
+
+/// The child has unzipped: carry on with the import of that folder, in the
+/// same job. A problem found now (not a takeout, bad manifest, the name is
+/// taken) fails the job, since there is no request left to answer.
+pub async fn continue_after_unzip(state: &AppState, callback: &IpcCallback) {
+    let state = state.clone();
+    let callback = callback.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        let Some(job_id) = crate::handlers::jobs::job_id_of(&callback) else { return };
+        let Some(context) = state.jobs.take_context(&job_id) else { return };
+        let outcome = serde_json::from_value::<UnzipContext>(context)
+            .map_err(|e| format!("lost the import's plan: {e}"))
+            .and_then(|context| {
+                let flavor = flavor_from_route(&context.flavor).ok_or_else(|| format!("unknown view kind '{}'", context.flavor))?;
+                import_blocking(flavor, &state, &context.folder, context.name.as_deref(), Some(&job_id)).map_err(|e| match e {
+                    IeError::Bad(why) => why,
+                    IeError::Conflict { message, .. } => format!("{message} - import again with another `name`"),
+                })
+            });
+        if let Err(error) = outcome {
+            if let Some(job) = state.jobs.fail(&job_id, error) {
+                crate::handlers::jobs::emit_done(&state, &job);
+            }
+        }
+    })
+    .await;
+}
+
+/// The child failed (or couldn't start properly): give back every EID part 1
+/// allocated and any files it got to copy. The job itself is failed by the
+/// generic callback code afterwards.
+pub fn abort_import(state: &AppState, callback: &IpcCallback) {
+    let Some(job_id) = crate::handlers::jobs::job_id_of(callback) else { return };
+    let Some(context) = state.jobs.take_context(&job_id) else { return };
+    if let Ok(context) = serde_json::from_value::<ImportContext>(context) {
+        for item in &context.plan {
+            release_eid(state, &item.new);
+        }
+    }
+}
+
+/// Part 3: the child has copied the files.
+pub async fn finish_import(state: &AppState, callback: &IpcCallback) {
+    let state = state.clone();
+    let callback = callback.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        let Some(job_id) = crate::handlers::jobs::job_id_of(&callback) else { return };
+        // Taken once: a duplicate callback finds nothing and does nothing.
+        let Some(context) = state.jobs.take_context(&job_id) else { return };
+        let outcome = serde_json::from_value::<ImportContext>(context)
+            .map_err(|e| format!("lost the import's plan: {e}"))
+            .and_then(|context| finish_import_blocking(&state, &context, &callback.result));
+        let job = match outcome {
+            Ok(result) => {
+                state.refresh_dashboard_snapshot();
+                state.jobs.complete(&job_id, result)
+            }
+            Err(error) => state.jobs.fail(&job_id, error),
+        };
+        if let Some(job) = job {
+            crate::handlers::jobs::emit_done(&state, &job);
+        }
+    })
+    .await;
+}
+
+fn finish_import_blocking(state: &AppState, context: &ImportContext, copy_result: &Value) -> Result<Value, String> {
+    let flavor = flavor_from_route(&context.flavor).ok_or_else(|| format!("unknown view kind '{}'", context.flavor))?;
+    let name = &context.name;
+    let src = PathBuf::from(&context.src);
+    let manifest = &context.manifest;
+
+    // What the child says about each endpoint's files, by new EID.
+    let copied: BTreeMap<String, (usize, Option<String>)> = copy_result["items"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    Some((
+                        item["new_eid"].as_str()?.to_string(),
+                        (
+                            item["files"].as_u64().unwrap_or(0) as usize,
+                            item["error"].as_str().map(str::to_string),
+                        ),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let tag_ops = TagOps::new(&state.db_path.display().to_string());
+    tag_ops.initialize().map_err(|e| format!("{e:?}"))?;
+    let insert_request = state.queries.get_request_query("R1").ok_or_else(|| "query R1 is missing".to_string())?;
+    let insert_response = state.queries.get_response_query("RES1").ok_or_else(|| "query RES1 is missing".to_string())?;
+
+    let by_old: BTreeMap<&str, &ManifestEndpoint> = manifest.endpoints.iter().map(|e| (e.eid.as_str(), e)).collect();
+    let mut mapping: Vec<Value> = Vec::new();
+    let mut new_eids: Vec<String> = Vec::new();
+    let mut skipped: Vec<Value> = context.skipped.clone();
+
+    for item in &context.plan {
+        let skip = |why: String| json!({ "eid": item.old, "reason": why });
+        let Some(endpoint) = by_old.get(item.old.as_str()) else {
+            release_eid(state, &item.new);
+            skipped.push(skip("not in the manifest".to_string()));
+            continue;
+        };
+        let new_eid = &item.new;
+
+        match copied.get(new_eid) {
+            Some((_, None)) => {}
+            Some((_, Some(why))) => {
+                release_eid(state, new_eid);
+                skipped.push(skip(format!("couldn't copy its EQP data: {why}")));
                 continue;
             }
-        };
+            None => {
+                release_eid(state, new_eid);
+                skipped.push(skip("the compute process didn't report on its EQP data".to_string()));
+                continue;
+            }
+        }
 
         let dto = db::EndpointDto {
             endpoint_id: new_eid.clone(),
@@ -499,21 +791,12 @@ fn import_blocking(flavor: Flavor, state: &AppState, folder: &str, name_override
             method: Some(endpoint.method.clone().unwrap_or_else(|| "GET".to_string())),
         };
         if let Err(e) = db::insert_endpoint(&state.core, &state.queries, &dto) {
-            let _ = state.eid_allocator.release(&new_eid);
+            release_eid(state, new_eid);
             skipped.push(skip(format!("couldn't create the endpoint: {e:?}")));
             continue;
         }
 
-        let eqp_src = src.join(EQP_DIR).join(&endpoint.eid);
-        let eqp_dst = state.endpoint_storage_dir(&new_eid);
-        if eqp_src.is_dir() {
-            if let Err(e) = copy_eqp_dir(&eqp_src, &eqp_dst, &endpoint.eid, &new_eid) {
-                rollback_endpoint(state, &new_eid);
-                skipped.push(skip(format!("couldn't copy its EQP data: {e}")));
-                continue;
-            }
-        }
-
+        let eqp_dst = state.endpoint_storage_dir(new_eid);
         let mut qps_written = 0usize;
         let mut failed: Option<String> = None;
         for qp in &endpoint.qps {
@@ -525,11 +808,11 @@ fn import_blocking(flavor: Flavor, state: &AppState, folder: &str, name_override
             let (req, res) = (request_path.display().to_string(), response_path.display().to_string());
             let written = state
                 .core
-                .proc(insert_request, &[&new_eid, &qp.request_number, &req, &qp.method])
+                .proc(insert_request, &[new_eid, &qp.request_number, &req, &qp.method])
                 .and_then(|_| {
                     state.core.proc(
                         insert_response,
-                        &[&new_eid, &qp.request_number, &res, &qp.status_code, &qp.response_time_ms],
+                        &[new_eid, &qp.request_number, &res, &qp.status_code, &qp.response_time_ms],
                     )
                 });
             match written {
@@ -541,29 +824,37 @@ fn import_blocking(flavor: Flavor, state: &AppState, folder: &str, name_override
             }
         }
         if let Some(why) = failed {
-            rollback_endpoint(state, &new_eid);
+            rollback_endpoint(state, new_eid);
             skipped.push(skip(why));
             continue;
         }
 
         for tag in &endpoint.tags {
-            let _ = tag_ops.add(&new_eid, tag);
+            let _ = tag_ops.add(new_eid, tag);
         }
 
-        mapping.push(json!({ "old_eid": endpoint.eid, "new_eid": new_eid, "qps": qps_written }));
-        new_eids.push(new_eid);
+        mapping.push(json!({ "old_eid": item.old, "new_eid": new_eid, "qps": qps_written }));
+        new_eids.push(new_eid.clone());
     }
 
     if new_eids.is_empty() {
-        return Err(IeError::Bad("none of the endpoints in this takeout could be imported".to_string()));
+        return Err("none of the endpoints in this takeout could be imported".to_string());
     }
 
-    // Build the RepoView's index from what was just written - the same code
-    // Create uses, so an imported RepoView is indistinguishable from a
-    // created one.
-    let dir = flavor.dir(state, &name);
+    // Build the view's index from what was just written - the same code
+    // Create uses, so an imported view is indistinguishable from a created
+    // one.
+    let catalog = open_catalog(state)?;
+    if catalog.get(flavor.kind(), name).map_err(|e| format!("{e:?}"))?.is_some() {
+        // Someone created that name while the child was copying.
+        for eid in &new_eids {
+            rollback_endpoint(state, eid);
+        }
+        return Err(format!("{} '{name}' was created by someone else meanwhile - import again with another name", flavor.label()));
+    }
+    let dir = flavor.dir(state, name);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let file_path = flavor.file_path(state, &name);
+    let file_path = flavor.file_path(state, name);
     let created = (|| -> Result<(), String> {
         let membership = open_membership(&file_path)?;
         build_index(state, &membership, &new_eids)?;
@@ -573,23 +864,20 @@ fn import_blocking(flavor: Flavor, state: &AppState, folder: &str, name_override
             .ok_or_else(|| format!("query {} is missing", flavor.catalog_query("CREATE")))?;
         catalog
             .core
-            .proc(
-                query,
-                &[&name, &file_path, &manifest.repoview.annotation, &manifest.repoview.source],
-            )
+            .proc(query, &[name, &file_path, &manifest.repoview.annotation, &manifest.repoview.source])
             .map_err(|e| format!("{e:?}"))?;
         let row_tags = flavor.row_tag_ops(state)?;
         for tag in &manifest.repoview.tags {
-            let _ = row_tags.add(&name, tag);
+            let _ = row_tags.add(name, tag);
         }
         Ok(())
     })();
     if let Err(e) = created {
         let _ = std::fs::remove_dir_all(&dir);
-        return Err(IeError::Bad(format!(
+        return Err(format!(
             "the endpoints were imported but the {} couldn't be created: {e}",
             flavor.label()
-        )));
+        ));
     }
 
     // A WebView's front page comes back with it (it names no EIDs, so it is
@@ -610,11 +898,11 @@ fn import_blocking(flavor: Flavor, state: &AppState, folder: &str, name_override
     // them (same approach) rather than copying stale files.
     let tables_regenerated = flavor.has_tables()
         && std::fs::read_to_string(src.join("Tables-meta.md"))
-        .ok()
-        .and_then(|meta| parse_approach_line(&meta))
-        .and_then(|api_name| Approach::parse(Some(api_name)).ok())
-        .map(|approach| generate_tables_blocking(state, &name, approach, 100).is_ok())
-        .unwrap_or(false);
+            .ok()
+            .and_then(|meta| parse_approach_line(&meta))
+            .and_then(|api_name| Approach::parse(Some(api_name)).ok())
+            .map(|approach| generate_tables_blocking(state, name, approach, 100).is_ok())
+            .unwrap_or(false);
 
     Ok(json!({
         "ok": skipped.is_empty(),
@@ -665,41 +953,6 @@ mod tests {
                 }],
             }],
         }
-    }
-
-    #[test]
-    fn eid_files_are_renamed_and_everything_else_is_left_alone() {
-        assert_eq!(
-            rename_eid_file("E0001-AAA-request-1.json", "E0001-AAA", "E0042-AAA"),
-            "E0042-AAA-request-1.json"
-        );
-        assert_eq!(rename_eid_file("E0001-AAA-headers-12.json", "E0001-AAA", "E0042-AAA"), "E0042-AAA-headers-12.json");
-        // another endpoint's file, and a name that only *starts like* the old EID
-        assert_eq!(rename_eid_file("E0002-AAA-request-1.json", "E0001-AAA", "E0042-AAA"), "E0002-AAA-request-1.json");
-        assert_eq!(rename_eid_file("E0001-AAAX-request-1.json", "E0001-AAA", "E0042-AAA"), "E0001-AAAX-request-1.json");
-        assert_eq!(rename_eid_file("notes.txt", "E0001-AAA", "E0042-AAA"), "notes.txt");
-    }
-
-    #[test]
-    fn copying_an_eqp_folder_renames_the_files_and_skips_subfolders() {
-        let src = temp_dir("src");
-        let dst = temp_dir("dst").join("E0042-AAA");
-        std::fs::write(src.join("E0001-AAA-request-1.json"), "req").unwrap();
-        std::fs::write(src.join("E0001-AAA-response-1.json"), "res").unwrap();
-        std::fs::write(src.join("readme.txt"), "keep my name").unwrap();
-        std::fs::create_dir_all(src.join("sub")).unwrap();
-        std::fs::write(src.join("sub").join("hidden.json"), "nope").unwrap();
-
-        let copied = copy_eqp_dir(&src, &dst, "E0001-AAA", "E0042-AAA").unwrap();
-
-        assert_eq!(copied, 3);
-        assert_eq!(std::fs::read_to_string(dst.join("E0042-AAA-request-1.json")).unwrap(), "req");
-        assert_eq!(std::fs::read_to_string(dst.join("E0042-AAA-response-1.json")).unwrap(), "res");
-        assert!(dst.join("readme.txt").exists());
-        assert!(!dst.join("sub").exists(), "subfolders must not be followed");
-        assert!(!dst.join("E0001-AAA-request-1.json").exists());
-        std::fs::remove_dir_all(src).unwrap();
-        std::fs::remove_dir_all(dst.parent().unwrap()).unwrap();
     }
 
     #[test]

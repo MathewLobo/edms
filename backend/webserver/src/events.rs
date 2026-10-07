@@ -69,6 +69,30 @@ pub enum ServerEvent {
     EndpointAnnotationUpdated { endpoint_id: String },
 
     ViewRefresh { view_type: String, count: usize },
+
+    /// Progress of a long Import/Export job (see `jobs.rs`), e.g. endpoints
+    /// copied so far. `progress` is `{step, done, total}`. Streamed on
+    /// `GET /jobs/ws`.
+    ViewIoProgress {
+        job_id: String,
+        op: String,
+        view: Option<String>,
+        name: Option<String>,
+        progress: serde_json::Value,
+    },
+
+    /// An Import/Export job finished, successfully or not: `result` is what
+    /// the HTTP request used to return directly, `error` is set when `ok` is
+    /// false.
+    ViewIoDone {
+        job_id: String,
+        op: String,
+        view: Option<String>,
+        name: Option<String>,
+        ok: bool,
+        result: Option<serde_json::Value>,
+        error: Option<String>,
+    },
 }
 
 #[cfg(test)]
