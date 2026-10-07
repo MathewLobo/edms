@@ -310,15 +310,47 @@ Content-Type: application/json
 ### List collections tags with their counts
 GET {{baseUrl}}/collections/tags/list
 
-### --- Same four "tags" routes + catalog create/list, scoped to webview ---
+### --- WebView: the same list model as RepoView (v1.0), under /webview ---
+# Every /repoview/... route below has a /webview/... twin with the same body
+# and behaviour (create, list, :name, rename, annotation, delete, duplicate,
+# convert-to-collection, combine, takeout, import, membership-tags, by-tag).
+# A WebView has no tables routes; it has a front page instead.
 
+### Create a WebView from a Collection (source_collection is required now)
 POST {{baseUrl}}/webview/create
 Content-Type: application/json
 
-{ "name": "wtest" }
+{ "name": "wtest", "source_collection": "content-api" }
 
-### List registered webviews
+### List WebViews
 GET {{baseUrl}}/webview/list
+
+### Modify Frontpage: load (a new WebView starts with {})
+GET {{baseUrl}}/webview/wtest/front-page
+
+### Modify Frontpage: save (any JSON object; replaces the previous one)
+POST {{baseUrl}}/webview/wtest/front-page
+Content-Type: application/json
+
+{ "front_page": { "title": "Content API docs", "sections": [] } }
+
+### Combine two WebViews
+POST {{baseUrl}}/webview/combine
+Content-Type: application/json
+
+{ "name": "wall", "sources": ["wtest", "wtest2"] }
+
+### Takeout (front-page.json goes with it) and import it back
+POST {{baseUrl}}/webview/wtest/takeout
+Content-Type: application/json
+
+{}
+
+### Import reads storage/imports/uncompressed/webview/{folder}/
+POST {{baseUrl}}/webview/import
+Content-Type: application/json
+
+{ "folder": "wtest", "name": "wtest-imported" }
 
 ### Create a webview tag, or add to its count if it already exists
 POST {{baseUrl}}/webview/tags/create
@@ -341,46 +373,28 @@ Content-Type: application/json
 ### List webview tags with their counts
 GET {{baseUrl}}/webview/tags/list
 
-### --- Repoview: a real per-instance directory, copied FROM a collection ---
-# Unlike webview/collections tags below, repoview also has its own
-# membership + real copied data — see API_REFERENCE.md's Repoview section.
+### --- Repoview (v1.0): a LIST - a SQLite index + Tables-*.md, no EQP data ---
+# The EQP data is only copied at Import/Export time. There are no routes to
+# browse, add or remove a RepoView's endpoints - see API_REFERENCE.md.
 
-### Create a repoview from a collection — copies real request/response/
-# header files for the given endpoint_ids (or every member, if omitted).
+### Create a repoview from a collection - builds the list (members, tags, a
+# snapshot of each endpoint + its QPs, and the size of its EQP data). Instant:
+# nothing is copied. Omit endpoint_ids for every member.
 POST {{baseUrl}}/repoview/create
 Content-Type: application/json
 
 { "name": "rtest", "annotation": "optional", "source_collection": "product-catalog" }
 
-### Bulk delete — each name deleted independently, one bad name doesn't
-# block the rest. Always 200; check each entry's own "ok" in results.
-POST {{baseUrl}}/repoview/delete
-Content-Type: application/json
-
-{ "names": ["rtest", "rtest-2"] }
-
-### List registered repoviews (catalog rows only, no aggregate stats)
+### List every repoview with ALL the columns the UI table reads, in one call:
+# name, tags, dataTags, crud, segments, segmentCount, eidCount, qpCount,
+# indexLists, dateCreated, dataSizeBytes, ...
 GET {{baseUrl}}/repoview/list
 
-### One repoview's full stats: eid_count, data_size_bytes, qp_count,
-# tags_in_data, crud_types, source
+### One repoview (snake_case): eid_count, qp_count, data_size_bytes,
+# tags_in_data, crud_types, segments, segment_count, index_lists, source, tags
 GET {{baseUrl}}/repoview/rtest
 
-### List a repoview's member endpoints
-GET {{baseUrl}}/repoview/rtest/endpoints
-
-### List the per-endpoint tags this repoview carries in its own copy —
-# auto-copied at create time, separate from tags_in_data (read live from
-# the central table) and from membership-tags (tags on the row itself).
-GET {{baseUrl}}/repoview/rtest/tags/endpoints
-
-### Remove one member — also deletes its copied data from this repoview
-POST {{baseUrl}}/repoview/rtest/endpoints/remove
-Content-Type: application/json
-
-{ "endpoint_id": "E0001-AAA" }
-
-### Rename a repoview — moves the whole directory, not just one file
+### Rename a repoview - moves the whole folder
 POST {{baseUrl}}/repoview/rtest/rename
 Content-Type: application/json
 
@@ -392,21 +406,114 @@ Content-Type: application/json
 
 { "annotation": "updated" }
 
-### Duplicate a repoview — clones the whole directory, annotation, source,
-# and row-level tags under a new name. No regeneration of Tables-*.md;
-# the underlying data doesn't change on duplicate, so the copy is correct
-# as-is.
+### Duplicate a repoview - clones the folder, annotation, source and tags
 POST {{baseUrl}}/repoview/rtest-renamed/duplicate
 Content-Type: application/json
 
 { "new_name": "rtest-renamed-copy" }
 
-### Delete a repoview — removes the catalog row and the whole directory
-POST {{baseUrl}}/repoview/rtest-renamed/delete
+### Delete a repoview - removes the catalog row and the whole folder
+POST {{baseUrl}}/repoview/rtest-renamed-copy/delete
 
-### --- Row-level tags on the RepoView instance itself (modifiable "Tags" ---
-### field from the spec) — separate from tags_in_data (aggregate, from the
-### copied endpoint data) and from the central rollup below.
+### Multi-select delete - each name independently, one bad name doesn't block
+# the rest. Always 200; check each entry's own "ok" in results.
+POST {{baseUrl}}/repoview/delete
+Content-Type: application/json
+
+{ "names": ["rtest", "rtest-2"] }
+
+### --- Convert to Collection (the RMB pop-up) ---
+# New name: the Collection is created. Name already exists: 409 with
+# {"conflict": true, "options": ["merge", "rename"]} and nothing changes -
+# then retry with the user's choice below. Only endpoints that still exist
+# centrally (same URL + method) are added; the rest are listed in "skipped".
+
+### New (or existing - this is the one that gets the 409 warning)
+POST {{baseUrl}}/repoview/rtest-renamed/convert-to-collection
+Content-Type: application/json
+
+{ "collection": "my-collection" }
+
+### The user chose "merge" into the existing Collection
+POST {{baseUrl}}/repoview/rtest-renamed/convert-to-collection
+Content-Type: application/json
+
+{ "collection": "my-collection", "on_exists": "merge" }
+
+### The user chose "rename" - creates a new Collection with this name
+POST {{baseUrl}}/repoview/rtest-renamed/convert-to-collection
+Content-Type: application/json
+
+{ "collection": "my-collection", "on_exists": "rename", "new_name": "my-collection-2" }
+
+### --- Import / Export (takeout) ---
+# A RepoView is only a list, so this is the one place its EQP data is
+# touched. Takeout copies the data of every listed endpoint into
+# storage/takeout/{dest_name}/ with the SQLite index stripped (git/web
+# friendly), plus Tables-*.md and repoview-manifest.json (the endpoints'
+# URL/method/tags/QP status codes, which an EQP folder doesn't hold).
+#
+# Takeout and import are JOBS: they return 202 {job_id} at once and
+# edms-child does the copying. Watch GET /jobs/:id, or the WebSocket
+# GET /jobs/ws (ViewIoProgress while it runs, ViewIoDone when it finishes).
+
+### Take a RepoView out -> 202 {job_id}. 409 {conflict, options:["overwrite","rename"]}
+# straight away if a takeout of that name already exists.
+POST {{baseUrl}}/repoview/rtest-renamed/takeout
+Content-Type: application/json
+
+{}
+
+### Overwrite the existing takeout, or give it another name
+POST {{baseUrl}}/repoview/rtest-renamed/takeout
+Content-Type: application/json
+
+{ "dest_name": "rtest-for-git", "overwrite": true }
+
+### Ask how a job is doing: status running | done | failed | stalled, progress, result
+# (put the job_id from the 202 here)
+GET {{baseUrl}}/jobs/job-0000000000000-1
+
+### Recent jobs
+GET {{baseUrl}}/jobs
+
+### Import: put the takeout folder (e.g. from git) in
+# storage/imports/uncompressed/repo/ and name it here. Every endpoint gets a
+# FRESH EID (the same URL may already exist under another one), its EQP files
+# are renamed to match, and the RepoView's index and Tables are rebuilt.
+# 409 {conflict, options:["rename"]} if the RepoView name is taken - retry
+# with "name". The result (mapping, skipped, ...) is in the job.
+POST {{baseUrl}}/repoview/import
+Content-Type: application/json
+
+{ "folder": "rtest-for-git" }
+
+### Import under a different RepoView name
+POST {{baseUrl}}/repoview/import
+Content-Type: application/json
+
+{ "folder": "rtest-for-git", "name": "rtest-imported" }
+
+### Import a zipped takeout from storage/imports/compressed/repo/
+# It is unzipped first (strictly: any unsafe entry refuses the whole zip) into
+# uncompressed/repo/rtest-for-git/. 409 {options:["replace"]} if that folder is
+# already there - send "replace_extracted": true to replace it.
+POST {{baseUrl}}/repoview/import
+Content-Type: application/json
+
+{ "zip": "rtest-for-git.zip", "name": "rtest-from-zip" }
+
+### The Import/Export table: what is in storage/imports/ (scanned live)
+GET {{baseUrl}}/import-export/table
+
+### Format-check a row (a job): use the row's "section" and "path"
+POST {{baseUrl}}/import-export/check
+Content-Type: application/json
+
+{ "section": "compressed", "path": "repo/rtest-for-git.zip" }
+
+### --- Tags on the RepoView itself (the list-level tag ops) ---
+# Separate from dataTags, the tags of the endpoints inside it.
 
 ### Add a tag to a repoview
 POST {{baseUrl}}/repoview/rtest-renamed/membership-tags/add
@@ -428,12 +535,11 @@ GET {{baseUrl}}/repoview/by-tag/production
 
 ### --- Index Table generation ---
 # Two approaches, one active at a time (both write the same Tables-NNN.md /
-# Tables-meta.md names, so generating one replaces the other). Replaces every
-# existing Tables-*.md on each call. Not run automatically on create or on
-# membership changes - call this whenever you want the files refreshed.
+# Tables-meta.md names, so generating one replaces the other). Read from the
+# RepoView's own index. Not run automatically - call it to (re)generate.
 # NOTE: a JSON body is always required, even if just {}.
 
-### Approach [B] Endpoint Segments (the default) with the default batch size (100)
+### Approach [B] Endpoint Segments (the default), default batch size (100)
 POST {{baseUrl}}/repoview/rtest-renamed/tables/generate
 Content-Type: application/json
 
@@ -451,43 +557,16 @@ Content-Type: application/json
 
 { "approach": "sorted_tags", "batch_size": 50 }
 
-### --- Reading the generated files back (what the UI's "Endpoint Data table"
-### click loads) ---
-
-### Which files exist right now, and which approach produced them
+### Which generated files exist, and which approach produced them
 GET {{baseUrl}}/repoview/rtest-renamed/tables
 
-### The markdown of the master/navigation file, then of one batch
-# Only Tables-meta.md and Tables-<number>.md are ever served.
+### The markdown of the master/navigation file, then of one batch (what the
+# UI's "Endpoint Data table" click loads). Only Tables-meta.md and
+# Tables-<number>.md are ever served.
 GET {{baseUrl}}/repoview/rtest-renamed/tables/Tables-meta.md
 
 ###
 GET {{baseUrl}}/repoview/rtest-renamed/tables/Tables-001.md
-
-### --- Two-way merge: Collections <> RepoView ---
-
-### Collection -> RepoView, after creation: merge members of ANY collection
-# in (omit endpoint_ids for all of them). Existing members are refreshed.
-POST {{baseUrl}}/repoview/rtest-renamed/endpoints/add
-Content-Type: application/json
-
-{ "source_collection": "content-api", "endpoint_ids": ["E0001-AAA"] }
-
-### Via Tag Ops: merge in every endpoint carrying any of these central tags
-POST {{baseUrl}}/repoview/rtest-renamed/tags/import
-Content-Type: application/json
-
-{ "tags": ["production"] }
-
-### RepoView -> Collection. Endpoints that no longer exist centrally are
-# rebuilt from the RepoView's own copy under their ORIGINAL ids; anything
-# that still exists centrally is left untouched. Skipped members (no
-# snapshot / URL+method now owned by another endpoint) are reported in
-# results and not added; top-level ok is false if any were skipped.
-POST {{baseUrl}}/repoview/rtest-renamed/export-to-collection
-Content-Type: application/json
-
-{ "collection": "recovered", "create_if_missing": true }
 
 ### --- Same four "tags" routes as webview above, scoped to repoview ---
 # (central tag-count rollup, separate from the membership routes above)

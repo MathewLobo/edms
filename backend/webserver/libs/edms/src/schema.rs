@@ -394,17 +394,20 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
         }
     }
 
-    // RepoView-only: `source` records which Collection a RepoView's data
-    // was copied from (the "Bookmark Tag" field per the RepoView spec,
-    // 2026-09-05) — non-modifiable after creation. Collections/webview
-    // don't have a Source concept, so this only touches `repoview`.
-    let has_repoview_source: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('repoview') WHERE name = 'source'",
-        [],
-        |row| row.get(0),
-    )?;
-    if has_repoview_source == 0 {
-        conn.execute("ALTER TABLE repoview ADD COLUMN source TEXT", [])?;
+    // RepoView / WebView: `source` records which Collection a list was built
+    // from (the "Bookmark Tag" field per the RepoView spec, 2026-09-05) —
+    // non-modifiable after creation. Collections don't have a Source
+    // concept, so this only touches `repoview` and `webview` (WebView got
+    // the same list model in v1.0).
+    for table in ["repoview", "webview"] {
+        let has_source: i64 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = 'source'"),
+            [],
+            |row| row.get(0),
+        )?;
+        if has_source == 0 {
+            conn.execute(&format!("ALTER TABLE {table} ADD COLUMN source TEXT"), [])?;
+        }
     }
 
     // 9. Central tag-count rollups
@@ -442,6 +445,18 @@ pub fn initialize_schema(conn: &Connection) -> Result<()> {
             tagname TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (repoview_name, tagname)
+        )",
+        [],
+    )?;
+
+    // 10c. Per-webview tag memberships — the same row-level "Tags" field as
+    // 10b, for WebView (v1.0: UI and model are the same as RepoView's).
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS webview_tag_memberships (
+            webview_name TEXT NOT NULL,
+            tagname TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (webview_name, tagname)
         )",
         [],
     )?;

@@ -1,35 +1,29 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
-use edms::ops::repoview_tag_ops::RepoviewTagMembershipOps;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::state::AppState;
+use crate::{handlers::view_flavor::Flavor, state::AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct TagRequest {
     pub tag: String,
 }
 
-fn open_ops(state: &AppState) -> Result<RepoviewTagMembershipOps, String> {
-    let ops = RepoviewTagMembershipOps::new(&state.db_path.display().to_string());
-    ops.initialize().map_err(|e| format!("{e:?}"))?;
-    Ok(ops)
-}
-
-/// POST /repoview/:name/membership-tags/add
+/// POST /{repoview,webview}/:name/membership-tags/add
 pub async fn add_repoview_tag(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Path(name): Path<String>,
     Json(payload): Json<TagRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
         move || -> Result<usize, String> {
-            let ops = open_ops(&state)?;
+            let ops = flavor.row_tag_ops(&state)?;
             ops.add(&name, &payload.tag).map_err(|e| format!("{e:?}"))
         }
     })
@@ -51,16 +45,17 @@ pub async fn add_repoview_tag(
     }
 }
 
-/// POST /repoview/:name/membership-tags/remove
+/// POST /{repoview,webview}/:name/membership-tags/remove
 pub async fn remove_repoview_tag(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Path(name): Path<String>,
     Json(payload): Json<TagRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
         move || -> Result<usize, String> {
-            let ops = open_ops(&state)?;
+            let ops = flavor.row_tag_ops(&state)?;
             ops.remove(&name, &payload.tag).map_err(|e| format!("{e:?}"))
         }
     })
@@ -82,15 +77,16 @@ pub async fn remove_repoview_tag(
     }
 }
 
-/// GET /repoview/:name/membership-tags
+/// GET /{repoview,webview}/:name/membership-tags
 pub async fn list_repoview_tags_for_name(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Path(name): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
         move || -> Result<Vec<String>, String> {
-            let ops = open_ops(&state)?;
+            let ops = flavor.row_tag_ops(&state)?;
             ops.list(&name).map_err(|e| format!("{e:?}"))
         }
     })
@@ -109,22 +105,28 @@ pub async fn list_repoview_tags_for_name(
     }
 }
 
-/// GET /repoview/by-tag/:tagname
+/// GET /{repoview,webview}/by-tag/:tagname
 pub async fn repoviews_by_tag(
     State(state): State<AppState>,
+    Extension(flavor): Extension<Flavor>,
     Path(tagname): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let res = tokio::task::spawn_blocking({
         let state = state.clone();
         move || -> Result<Vec<String>, String> {
-            let ops = open_ops(&state)?;
+            let ops = flavor.row_tag_ops(&state)?;
             ops.repoviews_by_tag(&tagname).map_err(|e| format!("{e:?}"))
         }
     })
     .await;
 
     match res {
-        Ok(Ok(repoviews)) => (StatusCode::OK, Json(json!({ "repoviews": repoviews }))),
+        Ok(Ok(views)) => {
+            // `{"repoviews": [...]}` or `{"webviews": [...]}`
+            let mut body = serde_json::Map::new();
+            body.insert(format!("{}s", flavor.route()), json!(views));
+            (StatusCode::OK, Json(serde_json::Value::Object(body)))
+        }
         Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "ok": false, "error": e })),

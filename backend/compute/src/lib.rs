@@ -9,6 +9,7 @@ pub mod eid;
 pub mod remove_url;
 pub mod validate;
 pub mod table_view;
+pub mod view_io;
 #[allow(non_snake_case)]
 pub mod audit_orphanedEIDs;
 pub mod file_converter;
