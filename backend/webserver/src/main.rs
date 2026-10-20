@@ -1,6 +1,7 @@
 mod config;
 mod dashboard_db;
 mod date_watcher;
+mod qp_service;
 mod db;
 mod events;
 mod handlers;
@@ -390,11 +391,18 @@ async fn main() -> anyhow::Result<()> {
         .route("/logs", get(get_logs))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        .with_state(state.clone());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     info!("Listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    // Index existing request snapshots into duplicate store
+    let storage_root_str = state.storage_root.clone();
+    let store_clone = state.duplicate_store.clone();
+    tokio::task::spawn_blocking(move || {
+        store_clone.rebuild_from_storage(&storage_root_str);
+    });
 
     // CRUD Operations: global, one-time processing on launch (Ravi's [1]
     // approach) — spun up via the compute service, same as the Refresh

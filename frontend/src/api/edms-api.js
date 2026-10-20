@@ -445,6 +445,17 @@
 
                         if (
                             event.type ===
+                            'DuplicateQpBlocked'
+                        ) {
+                            console.warn(
+                                '%c[DUPLICATE DETECTED] Duplicate request detected! Backend skipped saving redundant copy to disk.',
+                                'color: #ff9800; font-weight: bold; font-size: 14px;',
+                                event
+                            );
+                        }
+
+                        if (
+                            event.type ===
                             'TestStarted'
                         ) {
 

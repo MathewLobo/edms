@@ -142,6 +142,10 @@ pub fn insert_response_metadata(
     status_code: Option<i32>,
     response_time_ms: Option<i32>,
 ) -> EdmsResult<usize> {
+    let _ = core.proc(
+        "DELETE FROM response_metadata WHERE endpoint_id = ? AND request_number = ?",
+        &[&endpoint_id, &request_number],
+    );
     let q = queries.get_response_query("RES1").ok_or(EdmsError::UnknownError)?;
     core.proc(q, &[&endpoint_id, &request_number, &file_path, &status_code, &response_time_ms])
 }
@@ -379,4 +383,43 @@ pub fn endpoints_for_ids(core: &EdmsCore, _queries: &QueryMap, ids: &[String]) -
     }
 
     Ok(result)
+}
+pub fn reassign_qp_numbers(
+    core: &EdmsCore,
+    endpoint_id: &str,
+    storage_dir: &str,
+) -> EdmsResult<usize> {
+    let existing: Vec<i32> = core.cproc(
+        "SELECT DISTINCT request_number FROM request_metadata WHERE endpoint_id = ? ORDER BY request_number ASC",
+        &[&endpoint_id],
+        |row| row.get(0),
+    )?;
+
+    let mut renamed = 0usize;
+
+    for (zero_idx, old_n) in existing.iter().enumerate() {
+        let new_n = (zero_idx as i32) + 1;
+        if *old_n == new_n {
+            continue;
+        }
+
+        let new_req_path = format!("{}/{}-request-{}.json", storage_dir, endpoint_id, new_n);
+        let new_res_path = format!("{}/{}-response-{}.json", storage_dir, endpoint_id, new_n);
+        let req_str: &str = &new_req_path;
+        let res_str: &str = &new_res_path;
+
+        core.proc(
+            "UPDATE request_metadata SET request_number = ?, file_path = ? WHERE endpoint_id = ? AND request_number = ?",
+            &[&new_n, &req_str, &endpoint_id, old_n],
+        )?;
+
+        core.proc(
+            "UPDATE response_metadata SET request_number = ?, file_path = ? WHERE endpoint_id = ? AND request_number = ?",
+            &[&new_n, &res_str, &endpoint_id, old_n],
+        )?;
+
+        renamed += 1;
+    }
+
+    Ok(renamed)
 }

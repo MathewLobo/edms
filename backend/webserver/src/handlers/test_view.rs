@@ -367,6 +367,17 @@ async fn run_test_impl(
     annotation: Option<String>,
     timer_cfg: TimerConfig,
 ) -> Result<(), EdmsError> {
+    let mut request_json = request_json;
+    while let Value::Object(ref map) = request_json {
+        if map.contains_key("body") && map.contains_key("ok") {
+            if let Some(inner) = map.get("body") {
+                request_json = inner.clone();
+                continue;
+            }
+        }
+        break;
+    }
+
     // 1) Get-or-create the endpoint — per Mathew (2026-09-08), an endpoint
     //    is only created the moment it's actually tested. Re-testing an
     //    existing endpoint_id is the common case (returned as-is); a new
@@ -731,8 +742,17 @@ async fn read_saved_file(
         .join(format!("{endpoint_id}-{kind}-{request_number}.json"));
     match tokio::fs::read_to_string(&path).await {
         Ok(content) => {
-            let body: serde_json::Value =
+            let mut body: serde_json::Value =
                 serde_json::from_str(&content).unwrap_or(serde_json::Value::String(content));
+            while let serde_json::Value::Object(ref map) = body {
+                if map.contains_key("body") && map.contains_key("ok") {
+                    if let Some(inner) = map.get("body") {
+                        body = inner.clone();
+                        continue;
+                    }
+                }
+                break;
+            }
             (StatusCode::OK, Json(json!({ "ok": true, "body": body })))
         }
         Err(e) => (
@@ -784,6 +804,19 @@ pub async fn list_qps(
     if let Err(e) = safe_id(&endpoint_id) {
         return e;
     }
+
+    let dir = state.endpoint_storage_dir(&endpoint_id);
+    let storage_dir = dir.to_string_lossy().to_string();
+    let st2 = state.clone();
+    let eid2 = endpoint_id.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = crate::db::reassign_qp_numbers(&st2.core, &eid2, &storage_dir);
+    }).await;
+    let eid_clone = endpoint_id.clone();
+    let dir_clone = dir.clone();
+    tokio::task::spawn_blocking(move || {
+        reassign_qp_files_inline(&dir_clone, &eid_clone);
+    });
 
     let res = tokio::task::spawn_blocking({
         let st = state.clone();
@@ -852,6 +885,22 @@ pub async fn delete_qp(
     for kind in ["request", "response", "headers"] {
         let path = dir.join(format!("{endpoint_id}-{kind}-{request_number}.json"));
         let _ = tokio::fs::remove_file(path).await;
+    }
+
+    {
+        let st2 = state.clone();
+        let eid2 = endpoint_id.clone();
+        let storage_dir = dir.to_string_lossy().to_string();
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::db::reassign_qp_numbers(&st2.core, &eid2, &storage_dir)
+        })
+        .await;
+
+        let eid_clone = endpoint_id.clone();
+        let dir_clone = dir.clone();
+        tokio::task::spawn_blocking(move || {
+            reassign_qp_files_inline(&dir_clone, &eid_clone);
+        });
     }
 
     state
@@ -1032,6 +1081,44 @@ pub async fn create_qp(
     };
 
     let dir = state.endpoint_storage_dir(&endpoint_id);
+    let req_content = parse_qp_body(&payload.request_body).to_string();
+    let res_content = parse_qp_body(&payload.response_body).to_string();
+    let headers_json = json!({ "request_headers": {}, "response_headers": {} });
+    let hdr_content = headers_json.to_string();
+
+    let (m, u) = crate::qp_service::extract_method_and_endpoint(&req_content);
+    let method_to_use = if m.is_empty() { &method } else { &m };
+    let qp_data = crate::qp_service::extract_qp_data(&u);
+    let snapshot_key = crate::qp_service::make_canonical_key(
+        method_to_use,
+        &endpoint_id,
+        &req_content,
+        &res_content,
+        &hdr_content,
+        &qp_data,
+    );
+
+    if !state.duplicate_store.add_if_new(&snapshot_key) {
+        let dup_num = crate::qp_service::find_duplicate_qp(
+            &dir,
+            &endpoint_id,
+            method_to_use,
+            &u,
+            &req_content,
+            &res_content,
+            &hdr_content,
+            None,
+        ).unwrap_or(0);
+
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "ok": false,
+                "error": format!("Duplicate QP detected: an identical (Q, P, H) already exists as QP #{dup_num} for endpoint {endpoint_id}"),
+                "duplicate_of": dup_num,
+            })),
+        );
+    }
     let request_path = dir.join(format!("{endpoint_id}-request-{request_number}.json"));
     let response_path = dir.join(format!("{endpoint_id}-response-{request_number}.json"));
     let headers_path = dir.join(format!("{endpoint_id}-headers-{request_number}.json"));
@@ -1100,4 +1187,41 @@ pub async fn create_qp(
         .await;
 
     (StatusCode::OK, Json(json!({ "ok": true, "request_number": request_number })))
+}
+fn reassign_qp_files_inline(folder: &std::path::Path, eid: &str) {
+    let prefix = format!("{}-request-", eid);
+    let suffix = ".json";
+    let mut numbers: Vec<usize> = Vec::new();
+
+    let entries = match std::fs::read_dir(folder) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(prefix.as_str()) && name.ends_with(suffix) {
+            let mid = &name[prefix.len()..name.len() - suffix.len()];
+            if let Ok(n) = mid.parse::<usize>() {
+                numbers.push(n);
+            }
+        }
+    }
+
+    numbers.sort_unstable();
+
+    for (zero_idx, old_n) in numbers.into_iter().enumerate() {
+        let new_n = zero_idx + 1;
+        if old_n == new_n {
+            continue;
+        }
+        for kind in ["request", "response", "headers"] {
+            let old_path = folder.join(format!("{}-{}-{}.json", eid, kind, old_n));
+            let new_path = folder.join(format!("{}-{}-{}.json", eid, kind, new_n));
+            if old_path.exists() {
+                let _ = std::fs::rename(&old_path, &new_path);
+            }
+        }
+    }
 }
