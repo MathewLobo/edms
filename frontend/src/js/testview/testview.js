@@ -3245,11 +3245,11 @@ async function selectTestQP(
             qp.response = qp.response || {};
 
             if (reqRes && reqRes.ok) {
-                qp.request.body = extractPayloadBody(reqRes.data);
+                qp.request.body = reqRes.data?.body !== undefined ? reqRes.data.body : (reqRes.data || {});
             }
 
             if (resRes && resRes.ok) {
-                qp.response.body = extractPayloadBody(resRes.data);
+                qp.response.body = resRes.data?.body !== undefined ? resRes.data.body : (resRes.data || {});
             }
 
             if (headRes && headRes.ok) {
@@ -3338,7 +3338,7 @@ function renderCurrentResponse() {
                 response
             )
 
-            : extractPayloadBody(response.body);
+            : response.body ?? {};
 
     responseContent.value =
         formatJSON(content);
@@ -3355,7 +3355,7 @@ function getRequestBodyPreview(request) {
         request.body !== undefined
     ) {
 
-        return extractPayloadBody(request.body);
+        return request.body;
 
     }
 
@@ -4258,7 +4258,7 @@ async function runTestEndpoint() {
         return;
     }
 
-    const existingEndpoint =
+    let existingEndpoint =
         isCurrentInputExistingEndpoint(
             selectedTestEndpoint,
             endpointStr,
@@ -4266,6 +4266,12 @@ async function runTestEndpoint() {
         )
             ? selectedTestEndpoint
             : null;
+
+    if (!existingEndpoint && Array.isArray(endpoints)) {
+        existingEndpoint = endpoints.find(ep =>
+            isCurrentInputExistingEndpoint(ep, endpointStr, method)
+        ) || null;
+    }
 
     const endpointId =
         existingEndpoint?.id;
@@ -4850,7 +4856,7 @@ async function runTestEndpoint() {
             {};
 
         const savedRequest = requestResult.data;
-        qp.request.body = extractPayloadBody(savedRequest);
+        qp.request.body = savedRequest?.body !== undefined ? savedRequest.body : (savedRequest || {});
 
         if (
             savedRequest?.headers
@@ -4892,7 +4898,7 @@ async function runTestEndpoint() {
         const savedResponse =
             responseResult.data;
 
-        qp.response.body = extractPayloadBody(savedResponse);
+        qp.response.body = savedResponse?.body !== undefined ? savedResponse.body : (savedResponse || {});
 
         qp.response.status =
             statusCode;

@@ -397,11 +397,19 @@ async fn main() -> anyhow::Result<()> {
     info!("Listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    // Index existing request snapshots into duplicate store
+    // Index existing request snapshots into duplicate store with endpoint metadata
     let storage_root_str = state.storage_root.clone();
     let store_clone = state.duplicate_store.clone();
+    let core_clone = state.core.clone();
+    let queries_clone = state.queries.clone();
     tokio::task::spawn_blocking(move || {
-        store_clone.rebuild_from_storage(&storage_root_str);
+        let ep_map: std::collections::HashMap<String, (String, String)> =
+            crate::db::list_endpoints(&core_clone, &queries_clone)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|ep| (ep.endpoint_id, (ep.method.unwrap_or_else(|| "GET".to_string()), ep.endpoint_str)))
+                .collect();
+        store_clone.rebuild_from_storage(&storage_root_str, &ep_map);
     });
 
     // CRUD Operations: global, one-time processing on launch (Ravi's [1]

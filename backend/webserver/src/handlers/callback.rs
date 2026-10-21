@@ -166,50 +166,55 @@ async fn handle_run_test(state: &AppState, callback: &IpcCallback) {
         &qp_data,
     );
 
-    if !state.duplicate_store.add_if_new(&snapshot_key) {
-        let dup_num = crate::qp_service::find_duplicate_qp(
-            &dir,
-            &endpoint_id,
-            &method,
-            &endpoint_str,
-            &req_content,
-            &res_content,
-            &hdr_content,
-            Some(request_number),
-        ).unwrap_or(0);
+    let dup_opt = crate::qp_service::find_duplicate_qp(
+        &dir,
+        &endpoint_id,
+        &method,
+        &endpoint_str,
+        &req_content,
+        &res_content,
+        &hdr_content,
+        Some(request_number),
+    );
 
-        tracing::warn!(
-            "[handle_run_test] Duplicate QP detected for endpoint {endpoint_id}. Discarding duplicate write to disk."
-        );
-        let _ = tokio::fs::remove_file(&req_file_path).await;
-        let st = state.clone();
-        let eid = endpoint_id.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            let rq = st.queries.get_request_query("R7").ok_or(edms::error::EdmsError::UnknownError)?;
-            st.core.proc(rq, &[&eid, &request_number])
-        }).await;
+    // Only block if a matching QP actually exists on disk (prevents blocking deleted QPs as #0)
+    if let Some(dup_num) = dup_opt {
+        if dup_num > 0 {
+            tracing::warn!(
+                "[handle_run_test] Duplicate QP detected for endpoint {endpoint_id}. Discarding duplicate write to disk."
+            );
+            let _ = tokio::fs::remove_file(&req_file_path).await;
+            let st = state.clone();
+            let eid = endpoint_id.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let rq = st.queries.get_request_query("R7").ok_or(edms::error::EdmsError::UnknownError)?;
+                st.core.proc(rq, &[&eid, &request_number])
+            }).await;
 
-        state.cancel_timer(&endpoint_id, request_number);
-        let _ = state.events_tx.send(ServerEvent::DuplicateQpBlocked {
-            endpoint_id: endpoint_id.clone(),
-            request_number,
-            duplicate_of: dup_num,
-        });
+            state.cancel_timer(&endpoint_id, request_number);
+            let _ = state.events_tx.send(ServerEvent::DuplicateQpBlocked {
+                endpoint_id: endpoint_id.clone(),
+                request_number,
+                duplicate_of: dup_num,
+            });
 
-        let response_file = dir
-            .join(format!("{endpoint_id}-response-{dup_num}.json"))
-            .display()
-            .to_string();
+            let response_file = dir
+                .join(format!("{endpoint_id}-response-{dup_num}.json"))
+                .display()
+                .to_string();
 
-        let _ = state.events_tx.send(ServerEvent::TestFinished {
-            endpoint_id,
-            request_number: if dup_num > 0 { dup_num } else { request_number },
-            status_code,
-            response_time_ms,
-            response_file,
-        });
-        return;
+            let _ = state.events_tx.send(ServerEvent::TestFinished {
+                endpoint_id,
+                request_number: dup_num,
+                status_code,
+                response_time_ms,
+                response_file,
+            });
+            return;
+        }
     }
+
+    state.duplicate_store.add_if_new(&snapshot_key);
 
     let response_file = dir
         .join(format!("{endpoint_id}-response-{request_number}.json"))
