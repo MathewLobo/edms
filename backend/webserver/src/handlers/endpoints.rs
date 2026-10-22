@@ -229,6 +229,7 @@ pub async fn delete_endpoint(
             // collection's own file are a separate, pre-existing gap this
             // doesn't touch (see Known limitations).
             let _ = db::delete_bookmarks_for_endpoint(&state.core, &state.queries, &endpoint_id);
+            let _ = db::delete_endpoint_data(&state.core, &endpoint_id);
             let dir = state.endpoint_storage_dir(&endpoint_id);
             if dir.exists() {
                 let _ = tokio::fs::remove_dir_all(&dir).await;

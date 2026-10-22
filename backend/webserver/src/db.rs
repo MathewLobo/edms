@@ -107,7 +107,38 @@ pub fn update_annotation(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str,
 
 pub fn delete_endpoint(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str) -> EdmsResult<usize> {
     let q = queries.get_endpoint_query("E5").ok_or(EdmsError::UnknownError)?;
-    core.proc(q, &[&endpoint_id])
+    let rows = core.proc(q, &[&endpoint_id])?;
+    if rows > 0 {
+        let _ = delete_endpoint_data(core, endpoint_id);
+    }
+    Ok(rows)
+}
+
+/// Cascade for endpoint deletion: removes all QP metadata rows (request_metadata,
+/// response_metadata), history rows, tags, and summary metadata so that a recycled EID starts fresh without
+/// phantom QPs or stale history.
+pub fn delete_endpoint_data(core: &EdmsCore, endpoint_id: &str) -> EdmsResult<()> {
+    let _ = core.proc(
+        "DELETE FROM request_metadata WHERE endpoint_id = ?",
+        &[&endpoint_id],
+    );
+    let _ = core.proc(
+        "DELETE FROM response_metadata WHERE endpoint_id = ?",
+        &[&endpoint_id],
+    );
+    let _ = core.proc(
+        "DELETE FROM history WHERE endpoint_id = ?",
+        &[&endpoint_id],
+    );
+    let _ = core.proc(
+        "DELETE FROM tags WHERE endpoint_id = ?",
+        &[&endpoint_id],
+    );
+    let _ = core.proc(
+        "DELETE FROM metadata WHERE endpoint_id = ?",
+        &[&endpoint_id],
+    );
+    Ok(())
 }
 
 /* ---------------- request/response metadata (queries.yaml) ---------------- */
