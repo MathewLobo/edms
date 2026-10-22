@@ -2231,7 +2231,9 @@
 
         convertToCollection,
 
-        takeoutRepo
+        takeoutRepo,
+
+        loadData
 
     };
 
