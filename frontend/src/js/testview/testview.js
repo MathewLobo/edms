@@ -17,6 +17,7 @@ let filteredTestEndpoints = [];
 
 let selectedTestEndpoint = null;
 let selectedTestQP = null;
+let selectedSidebarItemId = null;
 
 let selectedQPIds = new Set();
 let selectedHistoryIds = new Set();
@@ -2387,6 +2388,10 @@ function selectSidebarItem(
 
     if (!endpoint) return;
 
+    selectedSidebarItemId =
+        card?.dataset?.id ??
+        (item.id !== undefined && item.id !== null ? String(item.id) : String(endpoint.id));
+
     selectTestEndpoint(
         endpoint,
         card,
@@ -2411,30 +2416,10 @@ function selectTestEndpoint(
     latestResponseMeta =
         null;
 
-    document
-        .querySelectorAll(
-            ".endpoint-card"
-        )
-        .forEach(
-            item => {
-
-                item.classList.remove(
-                    "bg-sky-500/10",
-                    "border-l-2",
-                    "border-sky-500"
-                );
-
-            }
-        );
-
-    if (card) {
-
-        card.classList.add(
-            "bg-sky-500/10",
-            "border-l-2",
-            "border-sky-500"
-        );
-
+    if (card?.dataset?.id) {
+        selectedSidebarItemId = String(card.dataset.id);
+    } else if (endpoint?.id !== undefined && endpoint?.id !== null && !selectedSidebarItemId) {
+        selectedSidebarItemId = String(endpoint.id);
     }
 
     if (testMethod) {
@@ -2586,29 +2571,71 @@ function updateSelectedEndpointHighlight() {
         .forEach(
             card => {
 
+                const cardId =
+                    card.dataset.id;
+
                 const cardEndpointId =
                     card.dataset.endpointId;
 
-                const active =
+                const matchesSpecificCard =
+                    selectedSidebarItemId !== null &&
+                    selectedSidebarItemId !== undefined &&
+                    String(cardId) === String(selectedSidebarItemId);
+
+                const matchesEndpointId =
                     selectedId !== undefined &&
                     selectedId !== null &&
-                    String(cardEndpointId) ===
-                    String(selectedId);
+                    (String(cardEndpointId) === String(selectedId) || String(cardId) === String(selectedId));
 
-                card.classList.toggle(
-                    "bg-sky-500/10",
-                    active
-                );
+                const active =
+                    matchesSpecificCard ||
+                    (!selectedSidebarItemId && matchesEndpointId);
 
-                card.classList.toggle(
-                    "border-l-2",
-                    active
-                );
+                if (active) {
 
-                card.classList.toggle(
-                    "border-sky-500",
-                    active
-                );
+                    card.classList.remove(
+                        "border-slate-300",
+                        "dark:border-slate-800",
+                        "border"
+                    );
+
+                    card.classList.add(
+                        "border-2",
+                        "border-cyan-500",
+                        "bg-cyan-500/10",
+                        "dark:bg-cyan-500/15",
+                        "ring-1",
+                        "ring-cyan-500/50",
+                        "shadow-sm"
+                    );
+
+                    card.style.borderColor =
+                        "var(--color-cyan-500, #06b6d4)";
+
+                } else {
+
+                    card.classList.remove(
+                        "border-2",
+                        "border-cyan-500",
+                        "bg-cyan-500/10",
+                        "dark:bg-cyan-500/15",
+                        "ring-1",
+                        "ring-cyan-500/50",
+                        "shadow-sm",
+                        "bg-sky-500/10",
+                        "border-l-2",
+                        "border-sky-500"
+                    );
+
+                    card.classList.add(
+                        "border",
+                        "border-slate-300",
+                        "dark:border-slate-800"
+                    );
+
+                    card.style.borderColor = "";
+
+                }
 
             }
         );
@@ -6562,6 +6589,9 @@ function setupSidebarTab(
                 tab;
 
             selectedTestEndpoint =
+                null;
+
+            selectedSidebarItemId =
                 null;
 
             selectedTestQP =

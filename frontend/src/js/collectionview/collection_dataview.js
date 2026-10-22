@@ -60,8 +60,8 @@
         getItems: () =>
           state.selected.size > 0
             ? state.endpoints.filter((ep) =>
-              state.selected.has(getEndpointId(ep)),
-            )
+                state.selected.has(getEndpointId(ep)),
+              )
             : state.endpoints,
         getTags: (endpoint) =>
           Array.isArray(endpoint.tags) ? endpoint.tags : [],
@@ -246,10 +246,7 @@
         );
       }
 
-      if (
-        window.EdmsAPI &&
-        typeof window.EdmsAPI.listQPs === "function"
-      ) {
+      if (window.EdmsAPI && typeof window.EdmsAPI.listQPs === "function") {
         preloadTasks.push(
           Promise.all(
             state.endpoints.map(async (endpoint) => {
@@ -427,9 +424,7 @@
 
     const annotation = endpoint.annotation || "—";
     const qpCount =
-      typeof endpoint.qpCount === "number"
-        ? endpoint.qpCount
-        : "—";
+      typeof endpoint.qpCount === "number" ? endpoint.qpCount : "—";
 
     if (
       typeof endpoint.qpCount !== "number" &&
@@ -456,10 +451,12 @@
 
     row.className = [
       "border-b",
-      "border-slate-200", "dark:border-slate-800",
+      "border-slate-200",
+      "dark:border-slate-800",
       "cursor-pointer",
       "transition-colors",
-      "hover:bg-slate-100", "dark:hover:bg-slate-800/60",
+      "hover:bg-slate-100",
+      "dark:hover:bg-slate-800/60",
 
       selected ? "bg-cyan-500/[0.055]" : "",
     ]
@@ -517,10 +514,11 @@
                             gap-1"
                   >
 
-                      ${tags.length
-        ? tags
-          .map(
-            (tag) => `
+                      ${
+                        tags.length
+                          ? tags
+                              .map(
+                                (tag) => `
 
                                           <button
                                               type="button"
@@ -537,9 +535,9 @@
                                           </button>
 
                                       `,
-          )
-          .join("")
-        : `
+                              )
+                              .join("")
+                          : `
                                   <span
                                       class="text-[10px]
                                              text-slate-400 dark:text-slate-600"
@@ -547,7 +545,7 @@
                                       —
                                   </span>
                                 `
-      }
+                      }
 
                   </div>
 
@@ -677,7 +675,9 @@
             name: String(qp.request_number),
           }));
           endpoint.qpCount = data.qps.length;
-          const badge = document.querySelector(`tr[data-id="${eid}"] .qp-count-badge`);
+          const badge = document.querySelector(
+            `tr[data-id="${eid}"] .qp-count-badge`,
+          );
           if (badge) {
             badge.textContent = endpoint.qpCount;
           }
@@ -703,11 +703,15 @@
           const cb = document.createElement("input");
           cb.type = "checkbox";
           cb.value = qp.id;
-          cb.className = "qp-checkbox h-3 w-3 rounded border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 accent-rose-500 shrink-0 cursor-pointer";
+          cb.className =
+            "qp-checkbox h-3 w-3 rounded border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 accent-rose-500 shrink-0 cursor-pointer";
           cb.onchange = () => {
             const allCbs = document.querySelectorAll(".qp-checkbox");
-            const checkedCbs = document.querySelectorAll(".qp-checkbox:checked");
-            if (selectAllCb) selectAllCb.checked = allCbs.length === checkedCbs.length;
+            const checkedCbs = document.querySelectorAll(
+              ".qp-checkbox:checked",
+            );
+            if (selectAllCb)
+              selectAllCb.checked = allCbs.length === checkedCbs.length;
           };
 
           const btn = document.createElement("button");
@@ -717,7 +721,7 @@
             "flex h-8 flex-1 items-center justify-center",
             "rounded-md border border-slate-300 dark:border-slate-700",
             "bg-slate-200 dark:bg-slate-800 text-[10px] font-semibold text-slate-600 dark:text-slate-400",
-            "transition hover:border-cyan-500/50 hover:text-cyan-700 dark:hover:text-cyan-300"
+            "transition hover:border-cyan-500/50 hover:text-cyan-700 dark:hover:text-cyan-300",
           ].join(" ");
           btn.textContent = qp.name;
           btn.onclick = () => loadQPDetails(eid, qp.id, btn);
@@ -746,12 +750,36 @@
     // Highlight active QP button in sidebar
     const qpPanel = document.getElementById("qpPanel");
     if (qpPanel) {
-      qpPanel.querySelectorAll("button").forEach(b => {
-        b.classList.remove("border-cyan-500", "text-cyan-700", "dark:text-cyan-300", "bg-cyan-500/10");
-        b.classList.add("border-slate-300", "dark:border-slate-700", "text-slate-600", "dark:text-slate-400", "bg-slate-200", "dark:bg-slate-800");
+      qpPanel.querySelectorAll("button").forEach((b) => {
+        b.classList.remove(
+          "border-cyan-500",
+          "text-cyan-700",
+          "dark:text-cyan-300",
+          "bg-cyan-500/10",
+        );
+        b.classList.add(
+          "border-slate-300",
+          "dark:border-slate-700",
+          "text-slate-600",
+          "dark:text-slate-400",
+          "bg-slate-200",
+          "dark:bg-slate-800",
+        );
       });
-      activeBtn.classList.remove("border-slate-300", "dark:border-slate-700", "text-slate-600", "dark:text-slate-400", "bg-slate-200", "dark:bg-slate-800");
-      activeBtn.classList.add("border-cyan-500", "text-cyan-700", "dark:text-cyan-300", "bg-cyan-500/10");
+      activeBtn.classList.remove(
+        "border-slate-300",
+        "dark:border-slate-700",
+        "text-slate-600",
+        "dark:text-slate-400",
+        "bg-slate-200",
+        "dark:bg-slate-800",
+      );
+      activeBtn.classList.add(
+        "border-cyan-500",
+        "text-cyan-700",
+        "dark:text-cyan-300",
+        "bg-cyan-500/10",
+      );
     }
 
     selectedQPId = qpId;
@@ -763,7 +791,7 @@
       const [reqRes, resRes, hdrRes] = await Promise.all([
         EdmsAPI.fetchRequest(endpointId, qpId).catch(() => null),
         EdmsAPI.fetchResponse(endpointId, qpId).catch(() => null),
-        EdmsAPI.fetchHeaders(endpointId, qpId).catch(() => null)
+        EdmsAPI.fetchHeaders(endpointId, qpId).catch(() => null),
       ]);
 
       const reqData = reqRes?.ok ? reqRes.data : null;
@@ -772,12 +800,12 @@
 
       const request = {
         body: reqData?.body || null,
-        headers: hdrData || {}
+        headers: hdrData || {},
       };
       const response = {
         status: resData?.status || null,
         body: resData?.body || resData || null,
-        headers: resData?.headers || {}
+        headers: resData?.headers || {},
       };
       openDetailsPanel(state.selectedEndpoint, { request, response });
     } catch (e) {
@@ -814,25 +842,171 @@
     // Response status
     const resStatus = document.getElementById("responseStatus");
     if (resStatus) {
-      resStatus.textContent = response.status ? String(response.status) : "Prototype";
-      resStatus.className = `mt-0.5 text-[11px] font-semibold ${response.status >= 200 && response.status < 300 ? "text-emerald-600 dark:text-emerald-400" :
-        response.status >= 400 ? "text-rose-600 dark:text-rose-400" : "text-slate-500 dark:text-slate-400"
-        }`;
+      resStatus.textContent = response.status
+        ? String(response.status)
+        : "";
+      resStatus.className = `mt-0.5 text-[11px] font-semibold ${
+        response.status >= 200 && response.status < 300
+          ? "text-emerald-600 dark:text-emerald-400"
+          : response.status >= 400
+            ? "text-rose-600 dark:text-rose-400"
+            : "text-slate-500 dark:text-slate-400"
+      }`;
     }
 
     // Response body
     const resBodyEl = document.getElementById("responseBody");
     if (resBodyEl) {
       resBodyEl.textContent = formatData(
-        response.body ?? response ?? { endpoint: endpoint.endpoint, message: "No response payload defined." }
+        response.body ??
+          response ?? {
+            endpoint: endpoint.endpoint,
+            message: "No response payload defined.",
+          },
       );
     }
 
     // Response headers
     const resHeadersEl = document.getElementById("responseHeaders");
     if (resHeadersEl) {
-      resHeadersEl.textContent = formatData(response.headers ?? "Not available");
+      resHeadersEl.textContent = formatData(
+        response.headers ?? "Not available",
+      );
     }
+
+    // ============================================
+    // REQUEST / RESPONSE PANEL ACTIONS
+    // ============================================
+    document
+      .getElementById("requestFullscreen")
+      ?.addEventListener("click", () => togglePanelFullscreen("requestBox"));
+
+    document
+      .getElementById("responseFullscreen")
+      ?.addEventListener("click", () => togglePanelFullscreen("responseBox"));
+
+    document
+      .getElementById("requestCopy")
+      ?.addEventListener("click", () => copyPanelContent("request"));
+
+    document
+      .getElementById("responseCopy")
+      ?.addEventListener("click", () => copyPanelContent("response"));
+  }
+  function getActivePanelContent(panelType) {
+    const isRequest = panelType === "request";
+
+    const bodySection = document.getElementById(
+      isRequest ? "requestBodySection" : "responseBodySection",
+    );
+
+    const headersSection = document.getElementById(
+      isRequest ? "requestHeadersSection" : "responseHeadersSection",
+    );
+
+    const body = document.getElementById(
+      isRequest ? "requestBody" : "responseBody",
+    );
+
+    const headers = document.getElementById(
+      isRequest ? "requestHeaders" : "responseHeaders",
+    );
+
+    if (!bodySection || !headersSection || !body || !headers) {
+      return "";
+    }
+
+    // Copy whichever section is currently visible.
+    if (!headersSection.classList.contains("hidden")) {
+      return headers.textContent || "";
+    }
+
+    return body.textContent || "";
+  }
+
+  // ============================================
+  // COPY CONTENT
+  // ============================================
+
+  async function copyPanelContent(panelType) {
+    const content = getActivePanelContent(panelType);
+
+    if (!content.trim()) {
+      console.warn(`No ${panelType} content available to copy.`);
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(content);
+
+      const button = document.getElementById(
+        panelType === "request" ? "requestCopy" : "responseCopy",
+      );
+
+      if (button) {
+        const originalTitle = button.title;
+        button.title = "Copied!";
+
+        setTimeout(() => {
+          button.title = originalTitle;
+        }, 1500);
+      }
+    } catch (error) {
+      console.error(`Failed to copy ${panelType} content:`, error);
+    }
+  }
+
+  // ============================================
+  // FULLSCREEN
+  // ============================================
+
+  function togglePanelFullscreen(panelId) {
+    const panel = document.getElementById(panelId);
+
+    if (!panel) return;
+
+    const wrapper = panel.parentElement;
+
+    if (!wrapper) return;
+
+    // Restore the original layout.
+    if (panel.dataset.fullscreen === "true") {
+      wrapper.removeAttribute("style");
+      panel.dataset.fullscreen = "false";
+      return;
+    }
+
+    // Keep the enlarged view within the viewport.
+    wrapper.style.position = "fixed";
+    wrapper.style.top = "24px";
+    wrapper.style.right = "24px";
+    wrapper.style.bottom = "24px";
+    wrapper.style.left = "24px";
+
+    wrapper.style.width = "auto";
+    wrapper.style.height = "auto";
+    wrapper.style.maxWidth = "none";
+    wrapper.style.maxHeight = "none";
+
+    wrapper.style.boxSizing = "border-box";
+    wrapper.style.zIndex = "9999";
+
+    wrapper.style.padding = "12px";
+    wrapper.style.margin = "0";
+    wrapper.style.borderRadius = "12px";
+
+    // Prevent the wrapper from overflowing the viewport.
+    wrapper.style.overflow = "hidden";
+
+    // Constrain the flex layout to the available height.
+    wrapper.style.minHeight = "0";
+    wrapper.style.display = "flex";
+    wrapper.style.flexDirection = "row";
+    wrapper.style.alignItems = "stretch";
+
+    wrapper.style.boxShadow = "0 0 0 100vmax rgba(2, 6, 23, 0.6)";
+
+    panel.dataset.fullscreen = "true";
   }
 
   // Keep renderEndpointDetails as alias for legacy call-sites
@@ -1314,9 +1488,9 @@
 
   function wireTable() {
     /*
-    * The table itself is rendered dynamically.
-    * Row-level events are attached when rows are created.
-    */
+     * The table itself is rendered dynamically.
+     * Row-level events are attached when rows are created.
+     */
   }
 
   // ============================================================
@@ -1366,8 +1540,8 @@
         const dx = e.clientX - startX;
         const dy = e.clientY - startY;
 
-        detailsPanel.style.left = (initialLeft + dx) + "px";
-        detailsPanel.style.top = (initialTop + dy) + "px";
+        detailsPanel.style.left = initialLeft + dx + "px";
+        detailsPanel.style.top = initialTop + dy + "px";
       });
 
       document.addEventListener("mouseup", () => {
@@ -1380,7 +1554,7 @@
 
     // Select All QPs checkbox
     document.getElementById("selectAllQPs")?.addEventListener("change", (e) => {
-      document.querySelectorAll(".qp-checkbox").forEach(cb => {
+      document.querySelectorAll(".qp-checkbox").forEach((cb) => {
         cb.checked = e.target.checked;
       });
     });
@@ -1393,7 +1567,7 @@
       let qpsToDelete = [];
 
       if (checkedBoxes.length > 0) {
-        qpsToDelete = Array.from(checkedBoxes).map(cb => cb.value);
+        qpsToDelete = Array.from(checkedBoxes).map((cb) => cb.value);
       } else if (selectedQPId !== null) {
         qpsToDelete = [selectedQPId];
       }
@@ -1402,17 +1576,20 @@
 
       const eid = getEndpointId(state.selectedEndpoint);
       try {
-        await Promise.all(qpsToDelete.map(id =>
-          EdmsAPI.deleteQP(eid, id)
-        ));
+        await Promise.all(qpsToDelete.map((id) => EdmsAPI.deleteQP(eid, id)));
         selectedQPId = null;
         document.getElementById("deleteQP").disabled = true;
         document.getElementById("detailsOverlay")?.classList.add("hidden");
         if (state.selectedEndpoint) {
           if (typeof state.selectedEndpoint.qpCount === "number") {
-            state.selectedEndpoint.qpCount = Math.max(0, state.selectedEndpoint.qpCount - qpsToDelete.length);
+            state.selectedEndpoint.qpCount = Math.max(
+              0,
+              state.selectedEndpoint.qpCount - qpsToDelete.length,
+            );
           }
-          const badge = document.querySelector(`tr[data-id="${eid}"] .qp-count-badge`);
+          const badge = document.querySelector(
+            `tr[data-id="${eid}"] .qp-count-badge`,
+          );
           if (badge && typeof state.selectedEndpoint.qpCount === "number") {
             badge.textContent = state.selectedEndpoint.qpCount;
           }
@@ -1432,7 +1609,13 @@
 
     if (reqBodyTab && reqHeadersTab && reqBodySec && reqHeadersSec) {
       const activeTabClass = ["bg-cyan-500", "text-slate-950", "font-semibold"];
-      const inactiveTabClass = ["text-slate-500", "dark:text-slate-400", "font-medium", "hover:text-slate-800", "dark:hover:text-slate-200"];
+      const inactiveTabClass = [
+        "text-slate-500",
+        "dark:text-slate-400",
+        "font-medium",
+        "hover:text-slate-800",
+        "dark:hover:text-slate-200",
+      ];
       reqBodyTab.addEventListener("click", () => {
         reqBodySec.classList.remove("hidden");
         reqHeadersSec.classList.add("hidden");
@@ -1460,7 +1643,11 @@
 
     if (resBodyTab && resHeadersTab && resBodySec && resHeadersSec) {
       const activeTabClass = ["bg-cyan-500", "text-slate-950", "font-semibold"];
-      const inactiveTabClass = ["text-slate-400", "font-medium", "hover:text-slate-200"];
+      const inactiveTabClass = [
+        "text-slate-400",
+        "font-medium",
+        "hover:text-slate-200",
+      ];
 
       resBodyTab.addEventListener("click", () => {
         resBodySec.classList.remove("hidden");
@@ -1563,10 +1750,10 @@
 
   function getEndpointId(endpoint) {
     /*
-    * Prefer the endpoint's own ID.
-    * Fall back to the endpoint path so
-    * older prototype data still works.
-    */
+     * Prefer the endpoint's own ID.
+     * Fall back to the endpoint path so
+     * older prototype data still works.
+     */
 
     return String(
       endpoint.endpoint_id ?? endpoint.id ?? endpoint.endpoint ?? Math.random(),
