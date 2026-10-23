@@ -2745,11 +2745,14 @@
 
     openModal(`
         <h2
-            class="mb-4 text-sm font-semibold
+            class=" text-sm font-semibold
                    text-slate-900 dark:text-white"
         >
             Create Repo View
         </h2>
+        <h3 class="text-sm dark:text-blue-400 text-blue-600 mb-3 font-bold">
+          ${folder.name}
+        </h3>
 
         <label
             for="repoViewNameInput"
@@ -2772,6 +2775,7 @@
                    outline-none
                    focus:border-cyan-500"
             placeholder="RepoView Name"
+            value="${folder.name}-repoview"
         >
 
         <div
