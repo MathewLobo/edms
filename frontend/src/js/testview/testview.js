@@ -1,3 +1,11 @@
+function extractPayloadBody(data) {
+    let current = data;
+    while (current && typeof current === 'object' && 'body' in current && 'ok' in current) {
+        current = current.body;
+    }
+    return current !== undefined ? current : {};
+}
+
 // ============================================================
 // EDMS TEST VIEW
 // ============================================================
@@ -2492,11 +2500,25 @@ async function refreshSelectedEndpointTags() {
         selectedTestEndpoint.tags = tags;
 
         if (qps.length > 0) {
+            // Deduplicate by ID to prevent duplicate buttons
+            const seen = new Set();
+            const uniqueQps = [];
+            for (const bQp of qps) {
+                const sid = String(bQp.id);
+                if (!seen.has(sid)) {
+                    seen.add(sid);
+                    uniqueQps.push(bQp);
+                }
+            }
+            uniqueQps.sort((a, b) => Number(a.id) - Number(b.id));
+
             const localQPs = Array.isArray(selectedTestEndpoint.qps) ? selectedTestEndpoint.qps : [];
-            selectedTestEndpoint.qps = qps.map(backendQp => {
-                const localQp = localQPs.find(q => String(q.id) === String(backendQp.id));
+            selectedTestEndpoint.qps = uniqueQps.map((backendQp, idx) => {
+                const seq = idx + 1;
+                const localQp = localQPs.find(q => String(q.id) === String(backendQp.id) || String(q.id) === String(seq));
                 return {
                     ...backendQp,
+                    name: String(seq),
                     request: localQp?.request || {},
                     response: localQp?.response || {}
                 };
@@ -3162,20 +3184,37 @@ async function doDeleteSelectedQP() {
         }
     }
 
-    selectedTestEndpoint.qps =
-        selectedTestEndpoint.qps.filter(
-            qp =>
-                !selectedQPIds.has(
-                    String(qp.id)
-                )
-        );
+    const remainingQps = selectedTestEndpoint.qps.filter(
+        qp => !selectedQPIds.has(String(qp.id))
+    );
+
+    // Renumber remaining QPs sequentially (1, 2, 3...)
+    remainingQps.forEach((qp, idx) => {
+        const sequentialNum = idx + 1;
+        qp.id = sequentialNum;
+        qp.name = String(sequentialNum);
+    });
+
+    selectedTestEndpoint.qps = remainingQps;
+
+    if (selectedTestQP && selectedQPIds.has(String(selectedTestQP.id))) {
+        selectedTestQP = selectedTestEndpoint.qps[0] || null;
+    } else if (selectedTestQP) {
+        const matching = selectedTestEndpoint.qps.find(q => String(q.id) === String(selectedTestQP.id));
+        if (matching) selectedTestQP = matching;
+    }
+
+    selectedQPIds.clear();
+
+    const ep = findEndpoint(endpointId);
+    if (ep) {
+        ep.qps = selectedTestEndpoint.qps;
+    }
 
     saveLocalQPs();
 
-    renderTestQP(
-        selectedTestEndpoint
-    );
-
+    renderTestQP(selectedTestEndpoint, selectedTestQP?.id);
+    renderTestEndpoints();
     applyTestFilters();
 
 }
@@ -3233,11 +3272,11 @@ async function selectTestQP(
             qp.response = qp.response || {};
 
             if (reqRes && reqRes.ok) {
-                qp.request.body = reqRes.data;
+                qp.request.body = reqRes.data?.body !== undefined ? reqRes.data.body : (reqRes.data || {});
             }
 
             if (resRes && resRes.ok) {
-                qp.response.body = resRes.data;
+                qp.response.body = resRes.data?.body !== undefined ? resRes.data.body : (resRes.data || {});
             }
 
             if (headRes && headRes.ok) {
@@ -4246,7 +4285,7 @@ async function runTestEndpoint() {
         return;
     }
 
-    const existingEndpoint =
+    let existingEndpoint =
         isCurrentInputExistingEndpoint(
             selectedTestEndpoint,
             endpointStr,
@@ -4254,6 +4293,12 @@ async function runTestEndpoint() {
         )
             ? selectedTestEndpoint
             : null;
+
+    if (!existingEndpoint && Array.isArray(endpoints)) {
+        existingEndpoint = endpoints.find(ep =>
+            isCurrentInputExistingEndpoint(ep, endpointStr, method)
+        ) || null;
+    }
 
     const endpointId =
         existingEndpoint?.id;
@@ -4389,6 +4434,8 @@ async function runTestEndpoint() {
             }
 
         }
+
+        requestJson = extractPayloadBody(requestJson);
 
         // -------------------------------------
         // SEND TO BACKEND
@@ -4803,43 +4850,29 @@ async function runTestEndpoint() {
             endpoint.qps.find(
                 candidate =>
                     String(candidate.id) ===
-                    String(selectedTestQP?.id)
+                    String(requestNumber)
             );
 
         if (!qp) {
-
-            qp =
-                selectedTestQP
-                    ? JSON.parse(
-                        JSON.stringify(
-                            selectedTestQP
-                        )
-                    )
-                    : {
-
-                        id:
-                            "default",
-
-                        name:
-                            "Default Request",
-
-                        request: {
-
-                            headers: {},
-
-                            body: {}
-
-                        },
-
-                        response: {}
-
-                    };
-
-            endpoint.qps.push(
-                qp
-            );
-
+            qp = {
+                id: requestNumber,
+                name: String(requestNumber),
+                method: method,
+                request: {
+                    headers: {},
+                    body: {}
+                },
+                response: {}
+            };
+            endpoint.qps.push(qp);
         }
+
+        if (endpoint.qps.length > 1) {
+            endpoint.qps = endpoint.qps.filter(
+                candidate => String(candidate.id) !== "default"
+            );
+        }
+        endpoint.qps.sort((a, b) => Number(a.id) - Number(b.id));
 
         // -------------------------------------
         // APPLY REQUEST DATA DIRECTLY
@@ -4849,26 +4882,8 @@ async function runTestEndpoint() {
             qp.request ||
             {};
 
-        const savedRequest =
-            requestResult.data;
-
-        if (
-            savedRequest?.body !==
-            undefined
-        ) {
-
-            qp.request.body =
-                savedRequest.body;
-
-        } else if (
-            savedRequest !==
-            undefined
-        ) {
-
-            qp.request.body =
-                savedRequest;
-
-        }
+        const savedRequest = requestResult.data;
+        qp.request.body = savedRequest?.body !== undefined ? savedRequest.body : (savedRequest || {});
 
         if (
             savedRequest?.headers
@@ -4910,23 +4925,7 @@ async function runTestEndpoint() {
         const savedResponse =
             responseResult.data;
 
-        if (
-            savedResponse?.body !==
-            undefined
-        ) {
-
-            qp.response.body =
-                savedResponse.body;
-
-        } else if (
-            savedResponse !==
-            undefined
-        ) {
-
-            qp.response.body =
-                savedResponse;
-
-        }
+        qp.response.body = savedResponse?.body !== undefined ? savedResponse.body : (savedResponse || {});
 
         qp.response.status =
             statusCode;
