@@ -99,8 +99,8 @@
             <!-- WEB VIEW -->
             <!-- ============================================ -->
 
-            ${isSingle ? menuItem("webview", iconGlobe(), "Web View") : ""}
-            ${isSingle ? menuItem("repoview", iconRepo(), "Repo View") : ""}
+            ${isSingle ? menuItem("webview", iconGlobe(), "Create Web View") : ""}
+            ${isSingle ? menuItem("repoview", iconRepo(), "Create Repo View") : ""}
             
             <!-- ============================================ -->
             <!-- CREATE TEST VIEW -->

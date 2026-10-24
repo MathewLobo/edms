@@ -7,7 +7,7 @@
 
   const DATA_URL = "../data/collections.json";
 
-  const PAGE_SIZE = 10;
+  const PAGE_SIZE = 100;
 
   // ============================================================
   // STATE
