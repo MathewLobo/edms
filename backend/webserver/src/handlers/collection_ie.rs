@@ -119,6 +119,9 @@ fn describe_members(state: &AppState, member_ids: &[String]) -> Result<(Vec<Mani
         let mut tags = tag_ops.get_by_endpoint(eid).map_err(|e| format!("{e:?}"))?;
         tags.sort();
         tags.dedup();
+        let (created_at, updated_at) = db::get_endpoint_dates(&state.core, eid)
+            .map_err(|e| format!("{e:?}"))?
+            .unwrap_or((None, None));
         let qps = db::list_qps_for_endpoint(&state.core, &state.queries, eid)
             .map_err(|e| format!("{e:?}"))?
             .into_iter()
@@ -136,6 +139,8 @@ fn describe_members(state: &AppState, member_ids: &[String]) -> Result<(Vec<Mani
             annotation: ep.annotation,
             tags,
             qps,
+            created_at,
+            updated_at,
         });
     }
     Ok((endpoints, without_endpoint))
@@ -448,6 +453,8 @@ mod tests {
             annotation: None,
             tags: tags.iter().map(|t| t.to_string()).collect(),
             qps: vec![ManifestQp { request_number: 1, method: Some("GET".into()), status_code: Some(200), response_time_ms: Some(5) }],
+            created_at: None,
+            updated_at: None,
         }
     }
 

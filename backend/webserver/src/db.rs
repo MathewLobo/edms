@@ -77,6 +77,31 @@ pub fn get_endpoint(core: &EdmsCore, queries: &QueryMap, endpoint_id: &str) -> E
     Ok(rows.into_iter().next())
 }
 
+/// When an endpoint was created and when it last changed, for the RepoView
+/// index and the takeout manifest. The central `updated_at` only moves when
+/// the endpoint's own row is written (creating it, or editing its annotation),
+/// so "last changed" is the newest of that, its newest QP and its newest tag:
+/// what a person would call the last time anyone touched it. `None` if there
+/// is no such endpoint.
+pub fn get_endpoint_dates(
+    core: &EdmsCore,
+    endpoint_id: &str,
+) -> EdmsResult<Option<(Option<String>, Option<String>)>> {
+    let rows = core.cproc(
+        "SELECT e.created_at,
+                MAX(COALESCE(e.updated_at, e.created_at, ''),
+                    COALESCE((SELECT MAX(timestamp) FROM request_metadata WHERE endpoint_id = e.endpoint_id), ''),
+                    COALESCE((SELECT MAX(created_at) FROM tags WHERE endpoint_id = e.endpoint_id), ''))
+         FROM endpoints e WHERE e.endpoint_id = ?",
+        &[&endpoint_id],
+        |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+    )?;
+    Ok(rows
+        .into_iter()
+        .next()
+        .map(|(created, updated)| (created, updated.filter(|u| !u.is_empty()))))
+}
+
 /// Looks up an endpoint by its exact (endpoint_str, method) pair — lets a
 /// caller check "does this already exist" before deciding whether to pass
 /// an existing endpoint_id vs. let a fresh one get allocated. Uniqueness is

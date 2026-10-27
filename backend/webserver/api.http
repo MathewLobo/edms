@@ -596,6 +596,9 @@ GET {{baseUrl}}/repoview/by-tag/production
 # Two approaches, one active at a time (both write the same Tables-NNN.md /
 # Tables-meta.md names, so generating one replaces the other). Read from the
 # RepoView's own index. Not run automatically - call it to (re)generate.
+# Endpoint Segments columns: EID, CRUD Type, Endpoint (path, no host), Query
+# Parameter, QP, QP Count, Status Summary, Annotation, Tags, Data Size,
+# Created, Updated. Tables-meta.md also carries the view's own annotation and tags.
 # NOTE: a JSON body is always required, even if just {}.
 
 ### Approach [B] Endpoint Segments (the default), default batch size (100)
