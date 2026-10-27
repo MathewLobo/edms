@@ -86,6 +86,13 @@ pub(crate) struct ManifestEndpoint {
     pub annotation: Option<String>,
     pub tags: Vec<String>,
     pub qps: Vec<ManifestQp>,
+    /// When the endpoint was created, and last changed, where the takeout
+    /// came from. Optional: a takeout made before these were recorded has
+    /// none, and an import gives its endpoints the dates of the import.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,14 +110,14 @@ pub(crate) fn build_manifest(
 ) -> Result<Manifest, String> {
     init_snapshot_tables(membership)?;
 
-    let rows: Vec<(String, String, Option<String>, Option<String>)> = membership
+    let rows: Vec<(String, String, Option<String>, Option<String>, Option<String>, Option<String>)> = membership
         .core
         .cproc(
-            "SELECT s.endpoint_id, s.endpoint_str, s.method, s.annotation
+            "SELECT s.endpoint_id, s.endpoint_str, s.method, s.annotation, s.created_at, s.updated_at
              FROM endpoint_snapshot s JOIN membership m ON m.endpoint_id = s.endpoint_id
              ORDER BY s.endpoint_id",
             &[],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
         )
         .map_err(|e| format!("{e:?}"))?;
 
@@ -154,13 +161,15 @@ pub(crate) fn build_manifest(
 
     let endpoints = rows
         .into_iter()
-        .map(|(eid, endpoint_str, method, annotation)| ManifestEndpoint {
+        .map(|(eid, endpoint_str, method, annotation, created_at, updated_at)| ManifestEndpoint {
             tags: tags.remove(&eid).unwrap_or_default(),
             qps: qps.remove(&eid).unwrap_or_default(),
             eid,
             endpoint_str,
             method,
             annotation,
+            created_at,
+            updated_at,
         })
         .collect();
 
@@ -1030,6 +1039,8 @@ mod tests {
                     status_code: Some(200),
                     response_time_ms: Some(12),
                 }],
+                created_at: Some("2026-10-01 09:00:00".into()),
+                updated_at: Some("2026-10-05 12:30:00".into()),
             }],
         }
     }

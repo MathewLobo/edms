@@ -16,7 +16,7 @@ endpoints:
 
   E4:
     help: "Update endpoint annotation"
-    query: "UPDATE endpoints SET annotation = ? WHERE endpoint_id = ?"
+    query: "UPDATE endpoints SET annotation = ?, updated_at = CURRENT_TIMESTAMP WHERE endpoint_id = ?"
 
   E5:
     help: "Delete endpoint by ID"
