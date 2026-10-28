@@ -5,7 +5,7 @@ EDMS acts like your proxy server for storing the EQP data and retrieving the res
 
 ## Purpose
 * Test your endpoint
-* Store your EQP into EDMS 
+* Store your EQP Data into EDMS
 * Get the response and use it in your application logic
 
 ## How to use it
