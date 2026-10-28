@@ -16,6 +16,9 @@ The rough idea is given below, syntax varies by language
 ```	
 import hashedtokens as ht
 response = ht.request(URL, payload, CRUDType)
+
+// do something with the output
+application_logic(response)
 ```
 
 
