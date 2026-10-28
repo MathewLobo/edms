@@ -8,6 +8,8 @@ EDMS acts like your proxy server for storing the EQP data and retrieving the res
 * Store your EQP Data into EDMS
 * Get the response and use it in your application logic
 
+`Note:` Multiple languages are supported
+
 ## How to use it
 Visit the Wiki for more instructions 
 https://github.com/hashedtokens/edms/wiki/Packages---Imports
@@ -24,7 +26,6 @@ response = (response_obj, ht_response)
 // do something with the output
 application_logic(response.response_obj)
 ```
-
 
 
 
