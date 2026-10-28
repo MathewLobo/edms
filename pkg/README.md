@@ -17,8 +17,11 @@ The rough idea is given below, syntax varies by language
 import hashedtokens as ht
 response = ht.request(URL, payload, CRUDType)
 
+# the response object that can be directly consumed and the response for EDMS action if successful or failure
+response = (response_obj, ht_response)
+
 // do something with the output
-application_logic(response)
+application_logic(response.response_obj)
 ```
 
 
