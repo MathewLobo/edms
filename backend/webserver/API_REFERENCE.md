@@ -295,55 +295,11 @@ The UI shows statistics per row (endpoint count, QP count, method counts, tags i
 
 ## Dev API status codes
 
-The dev API (`/hashedtokens/edms/api/history/` and `/collections/`) lets a backend developer insert EQP data without the UI. A call can carry several QPs, so "success or fail" is not enough: the result has one **overall** code, a code for the **endpoint** and the **collection** it touched, and a code for **each QP**. The routes answer `202` and the result arrives over the WebSocket; the codes below are what that result carries. They live in one place, `compute/src/api_status.rs`, used by both the routes and the compute ops. Codes are never reused or renumbered.
+The dev API (`/hashedtokens/edms/api/history/` and `/collections/`) lets a backend developer push one QP for one endpoint (endpoint, request, response, headers, plus EDMS data) without the UI. The route answers `202` and the final code arrives over the WebSocket, so the caller keeps a socket open and waits for it (about 15 seconds).
 
-Result shape (each status is `{code, name, message}`):
+The codes are linear: `0` is all good, `-1` is unknown (not assigned yet), and everything else counts up from `100` in the order it was added. A new code goes at the end and keeps its number. The one list for every language is [`pkg/status_codes.md`](../../pkg/status_codes.md); the Rust side is `compute/src/api_status.rs`, and a test fails if they differ.
 
-```json
-{
-  "status":     { "code": 2000, "name": "PARTIAL_SUCCESS", "message": "..." },
-  "endpoint":   { "code": 1021, "name": "ENDPOINT_REUSED", "message": "..." },
-  "collection": { "code": 1030, "name": "COLLECTION_CREATED", "message": "..." },
-  "qps": [
-    { "index": 0, "status": { "code": 1010, "name": "QP_INSERTED", "message": "..." }, "request_number": 3 },
-    { "index": 1, "status": { "code": 2010, "name": "QP_DUPLICATE_BLOCKED", "message": "..." }, "duplicate_of": 1 }
-  ]
-}
-```
-
-`endpoint` and `collection` are left out when the op doesn't touch them (History `test` has no collection). `request_number`, `duplicate_of` and `detail` only appear when they apply.
-
-| Code | Name | Applies to | Meaning |
-|---|---|---|---|
-| 1000 | `OK` | call | Every QP was stored |
-| 1010 | `QP_INSERTED` | QP | QP stored |
-| 1020 | `ENDPOINT_CREATED` | endpoint | A new endpoint was created |
-| 1021 | `ENDPOINT_REUSED` | endpoint | The endpoint already existed and was reused |
-| 1030 | `COLLECTION_CREATED` | collection | A new collection was created |
-| 1031 | `COLLECTION_REUSED` | collection | The collection already existed and was reused |
-| 1032 | `ADDED_TO_COLLECTION` | collection | The endpoint was added to the collection |
-| 2000 | `PARTIAL_SUCCESS` | call | Some QPs were stored and some were not; see each QP's code |
-| 2001 | `NOTHING_NEW` | call | Every QP was a duplicate of one already stored; nothing was written |
-| 2010 | `QP_DUPLICATE_BLOCKED` | QP | An identical QP (same request, response and headers) is already stored; `duplicate_of` says which |
-| 2030 | `ALREADY_IN_COLLECTION` | collection | The endpoint was already in the collection |
-| 4000 | `INVALID_REQUEST` | call | The request body is not valid JSON or not an object |
-| 4001 | `MISSING_PARAM` | call | A mandatory parameter is missing (also a call with no QPs) |
-| 4002 | `UNKNOWN_OP` | call | The `ops` value is not one this endpoint supports |
-| 4003 | `INVALID_PARAM` | call | A parameter has a value that is not allowed (also when every QP is unusable) |
-| 4004 | `TOO_MANY_QPS` | call | The call carries more QPs than one call may |
-| 4010 | `QP_INVALID` | QP | The QP data is not usable |
-| 5000 | `INTERNAL_ERROR` | call | The server failed while handling the call |
-| 5001 | `NOTHING_STORED` | call | No QP was stored and at least one test failed or timed out |
-| 5002 | `COMPUTE_UNAVAILABLE` | call | The compute process could not be started |
-| 5003 | `COMPUTE_STALLED` | call | The compute process never reported back |
-| 5010 | `QP_TEST_FAILED` | QP | The test request failed, so the QP was not stored |
-| 5011 | `QP_TEST_TIMED_OUT` | QP | The test request timed out, so the QP was not stored |
-
-**Groups.** `1xxx` stored what was asked. `2xxx` nothing failed, but not everything asked was stored (duplicates, partial). `4xxx` the request itself is wrong and nothing was attempted. `5xxx` the request was fine and the work did not complete.
-
-**The overall code is worked out from the QPs** (`overall()` in `api_status.rs`): every QP stored is `OK`; some stored and some not is `PARTIAL_SUCCESS`; none stored and all duplicates is `NOTHING_NEW`; none stored and all unusable is `INVALID_PARAM`; none stored otherwise is `NOTHING_STORED`.
-
-**When a route answers directly.** Only the codes a route can raise before any work starts get an HTTP status instead of `202`: `4000`-`4004` are `400`, `5000` is `500`, `5002` is `503`. Every other code only ever arrives in the WebSocket result, because the HTTP call was already answered.
+A result carries the status as `{code, name, message}` plus the fields that apply (`endpoint_id`, `request_number`, `duplicate_of`, `endpoint_created`, `collection_created`, `detail`). Only the codes a route can raise before any work starts get an HTTP status instead of `202`: `100` to `103` are `400`, `109` is `500`, `107` is `503`. Every other code only arrives in the WebSocket result.
 
 ---
 
